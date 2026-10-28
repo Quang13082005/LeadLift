@@ -9,6 +9,7 @@
     "lint": "eslint",
     "type-check": "tsc --noEmit",
     "test:foundation": "tsx scripts/test-foundation.ts",
+    "test:business": "tsx scripts/test-business.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -19,7 +20,8 @@
     "next": "16.4.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "ws": "^8.22.0"
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
