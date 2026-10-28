@@ -1,14 +1,13 @@
-import Link from "next/link";
-import { navigation } from "@/components/navigation";
-import { FoundationNotice, PageHeading } from "@/components/page-foundation";
-import { EmptyState, Panel, StatCard } from "@/components/ui/primitives";
+import { connection } from "next/server";
+import { DashboardView } from "@/components/dashboard-view";
+import { getDashboardData, type DashboardData } from "@/lib/services/dashboard-service";
 
-export default function Home() {
-  return <>
-    <PageHeading title="Tổng quan" description="Theo dõi khách hàng, hoạt động kiểm tra website và cơ hội hợp tác." />
-    <FoundationNotice />
-    <div className="stats">{["Doanh nghiệp", "Website đã kiểm tra", "Đề xuất", "Cơ hội hợp tác"].map((label) => <StatCard key={label} label={label} />)}</div>
-    <div className="stack"><Panel title="Không gian làm việc" description="Đi đến các khu vực của LeadLift."><div className="panel-body section-links">{navigation.slice(1).map((item) => <Link className="panel section-link" key={item.href} href={item.href}><strong><span aria-hidden="true">{item.icon} </span>{item.title} →</strong><p>{item.description}</p></Link>)}</div></Panel>
-    <Panel title="Hoạt động gần đây"><EmptyState icon="◷" title="Chưa kết nối hoạt động" description="Lịch sử hoạt động sẽ xuất hiện khi các chức năng nghiệp vụ được triển khai." /></Panel></div>
-  </>;
+export default async function Home() {
+  await connection();
+  let data: DashboardData = { total: null, audited: null, prepared: null, replies: null, items: [] };
+  if (process.env.NODE_ENV === "development") {
+    try { data = await getDashboardData(); }
+    catch { data.error = "Không thể tải dữ liệu tổng quan. Vui lòng tải lại trang."; }
+  } else data.error = "Dữ liệu nghiệp vụ chỉ khả dụng trong development local cho đến khi Authentication hoàn thiện.";
+  return <DashboardView data={data} />;
 }

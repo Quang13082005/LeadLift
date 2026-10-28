@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { getBusinesses } from "@/lib/services/business-service";
+import { getBusinessById, getBusinesses } from "@/lib/services/business-service";
 import { BusinessListPage } from "@/components/business/business-list";
 import { EmptyState, Panel, LoadingState } from "@/components/ui/primitives";
 import { publicBusinessError } from "@/lib/business-error";
@@ -12,11 +12,18 @@ export const metadata: Metadata = {
   description: "Quản lý hồ sơ khách hàng tiềm năng, tìm kiếm, lọc theo ngành nghề và chuẩn bị dữ liệu Website Audit.",
 };
 
-async function BusinessesDataLoader() {
+async function BusinessesDataLoader({ searchParams }: { searchParams: Promise<{ businessId?: string; tab?: string }> }) {
   await connection();
+  const { businessId, tab } = await searchParams;
   let initialData: BusinessQueryResult;
   try {
-    initialData = await getBusinesses({ page: 1, limit: 10 });
+    const [result, selected] = await Promise.all([
+      getBusinesses({ page: 1, limit: 10 }),
+      businessId ? getBusinessById(businessId) : Promise.resolve(null),
+    ]);
+    initialData = selected && !result.items.some((item) => item.id === selected.id)
+      ? { ...result, items: [selected, ...result.items].slice(0, result.limit) }
+      : result;
   } catch (error) {
     initialData = {
       error: publicBusinessError(error).message,
@@ -28,10 +35,10 @@ async function BusinessesDataLoader() {
       stats: { totalCount: 0, prioritizeAuditCount: 0, outreachSentCount: 0, inDiscussionCount: 0 },
     };
   }
-  return <BusinessListPage initialData={initialData} />;
+  return <BusinessListPage initialData={initialData} initialSelectedBusinessId={businessId} initialTab={tab === "pipeline" ? "pipeline" : "discovery"} />;
 }
 
-export default function BusinessesPage() {
+export default function BusinessesPage({ searchParams }: { searchParams: Promise<{ businessId?: string; tab?: string }> }) {
   if (process.env.NODE_ENV !== "development") {
     return (
       <>
@@ -54,7 +61,7 @@ export default function BusinessesPage() {
         </div>
       }
     >
-      <BusinessesDataLoader />
+      <BusinessesDataLoader searchParams={searchParams} />
     </Suspense>
   );
 }

@@ -23,7 +23,7 @@ const FIXTURE_PROBLEMS: FixtureProblem[] = [
   {
     id: "meta",
     title: "Mô tả meta trùng lặp",
-    n: 7,
+    n: 2,
     level: "Cao",
     category: "SEO",
     reason: "Nhiều URL có nội dung thẻ meta description tương tự nhau; cần xem nội dung trang trước khi kết luận.",
@@ -33,7 +33,7 @@ const FIXTURE_PROBLEMS: FixtureProblem[] = [
   {
     id: "ratio",
     title: "Tỷ lệ văn bản / HTML thấp",
-    n: 97,
+    n: 17,
     level: "Trung bình",
     category: "Nội dung",
     reason: "Lượng văn bản nhìn thấy thấp so với mã HTML ở nhiều trang. Đây chỉ là tín hiệu kỹ thuật, không tự chứng minh SEO kém.",
@@ -43,7 +43,7 @@ const FIXTURE_PROBLEMS: FixtureProblem[] = [
   {
     id: "short",
     title: "Một số trang có ít từ",
-    n: 82,
+    n: 14,
     level: "Trung bình",
     category: "Nội dung",
     reason: "Các trang có nội dung ngắn cần được xem theo mục đích sử dụng, tránh coi tất cả là lỗi.",
@@ -53,7 +53,7 @@ const FIXTURE_PROBLEMS: FixtureProblem[] = [
   {
     id: "title",
     title: "Tiêu đề trang quá dài",
-    n: 76,
+    n: 13,
     level: "Trung bình",
     category: "SEO",
     reason: "Tiêu đề dài có thể bị rút gọn khi hiển thị trên kết quả tìm kiếm.",
@@ -63,7 +63,7 @@ const FIXTURE_PROBLEMS: FixtureProblem[] = [
   {
     id: "links",
     title: "Ít liên kết nội bộ trỏ đến",
-    n: 41,
+    n: 7,
     level: "Tham khảo",
     category: "Liên kết",
     reason: "Một số URL nhận ít liên kết từ các trang khác trong phạm vi đã quét.",
@@ -79,14 +79,11 @@ interface FixturePage {
 }
 
 const FIXTURE_PAGES: FixturePage[] = [
-  { path: "/", http: 200, issueIds: ["title"] },
-  { path: "/menu", http: 200, issueIds: ["meta", "ratio", "short"] },
-  { path: "/places/1820", http: 200, issueIds: ["meta", "ratio", "short", "title"] },
-  { path: "/places/169", http: 200, issueIds: ["meta", "links"] },
-  { path: "/places/1814", http: 200, issueIds: ["ratio", "short"] },
-  { path: "/gioi-thieu", http: 200, issueIds: ["short", "links"] },
-  { path: "/lien-he", http: 200, issueIds: ["title", "links"] },
-  { path: "/tin-tuc", http: 200, issueIds: ["meta"] },
+  { path: "/", http: 200, issueIds: ["meta", "title"] },
+  { path: "/menu", http: 200, issueIds: ["ratio", "short"] },
+  { path: "/gioi-thieu", http: 200, issueIds: ["ratio", "links"] },
+  { path: "/lien-he", http: 200, issueIds: ["meta", "short"] },
+  { path: "/tin-tuc", http: 200, issueIds: ["ratio", "title"] },
 ];
 
 export function DesignV2FixtureAuditView() {
@@ -96,6 +93,7 @@ export function DesignV2FixtureAuditView() {
   const [filterMode, setFilterMode] = useState<"all" | "Cao" | "Trung bình">("all");
   const [selectedProblemId, setSelectedProblemId] = useState<string>("meta");
   const [verifiedMap, setVerifiedMap] = useState<Record<string, boolean>>({});
+  const [draftMarked, setDraftMarked] = useState<Record<string, boolean>>({});
 
   const [selectedPageIndex, setSelectedPageIndex] = useState<number | null>(null);
 
@@ -110,11 +108,9 @@ export function DesignV2FixtureAuditView() {
   const verifiedCount = Object.values(verifiedMap).filter(Boolean).length;
 
   const toggleVerify = (id: string) => {
-    setVerifiedMap((prev) => {
-      const next = !prev[id];
-      showToast(next ? "Đã ghi nhận xác minh vấn đề (demo)." : "Đã hủy xác minh (demo).");
-      return { ...prev, [id]: next };
-    });
+    const next = !verifiedMap[id];
+    setVerifiedMap((prev) => ({ ...prev, [id]: next }));
+    showToast(next ? "Đã ghi nhận xác minh vấn đề (demo)." : "Đã hủy xác minh (demo).");
   };
 
   const selectedPage = selectedPageIndex !== null ? FIXTURE_PAGES[selectedPageIndex] : null;
@@ -143,7 +139,7 @@ export function DesignV2FixtureAuditView() {
           <strong>DEMO / DỮ LIỆU MINH HỌA</strong> — Trang xem trước thị giác Design V2 bằng bộ dữ liệu prototype gốc để đối chiếu visual comparison. Không phải kết quả quét thật.
         </span>
         <Link href="/audit" className="button button-small">
-          Chuyển sang Audit dữ liệu thật →
+          Mở Audit dữ liệu thật →
         </Link>
       </div>
 
@@ -154,11 +150,11 @@ export function DesignV2FixtureAuditView() {
         <button
           type="button"
           className="button"
-          onClick={() => showToast("Chưa kết nối crawler. Kiểm tra lại chỉ hoạt động khi có backend.")}
+          onClick={() => { setVerifiedMap({}); setDraftMarked({}); showToast("Đã nạp lại dữ liệu fixture; không gửi yêu cầu quét thật."); }}
         >
-          ↻ Quét lại
+          ↻ Tải lại fixture (DEMO)
         </button>
-        <Link href="/outreach" className="button button-primary">
+        <Link href="/dev/design-v2/outreach" className="button button-primary">
           Xem đề xuất →
         </Link>
       </PageHeading>
@@ -210,14 +206,14 @@ export function DesignV2FixtureAuditView() {
 
         <div className="stat">
           <div className="stat-label">URL đã kiểm tra</div>
-          <div className="stat-value">100</div>
-          <div className="stat-note">Lượt quét demo</div>
+            <div className="stat-value">30</div>
+            <div className="stat-note">URL trong fixture tham khảo</div>
         </div>
 
         <div className="stat">
           <div className="stat-label">Nhóm tín hiệu cần xem</div>
           <div className="stat-value" style={{ color: "#c34a45" }}>
-            5
+            12
           </div>
           <div className="stat-note">Không phải lỗi đã xác minh</div>
         </div>
@@ -235,7 +231,7 @@ export function DesignV2FixtureAuditView() {
       <div className="bannerMini">
         <span aria-hidden="true" style={{ fontWeight: "bold", fontSize: 14 }}>ⓘ</span>
         <span>
-          <b>Phạm vi kiểm toán:</b> La Cà: 100 URL được quét / 6.505 URL trong sitemap (khoảng 1,5%). Không tự suy rộng thành toàn bộ website. Các website khác dùng số liệu demo.
+          <b>Phạm vi kiểm toán:</b> Fixture Design V2 có thống kê tham khảo cho 30 URL; bảng chi tiết mở 5 URL mẫu để thử popup. Đây là dữ liệu minh họa, không phải lần quét thật hay crawler production.
         </span>
       </div>
 
@@ -415,9 +411,9 @@ export function DesignV2FixtureAuditView() {
                 type="button"
                 className="button button-primary"
                 disabled={!isSelectedVerified}
-                onClick={() => showToast("Đã thêm vấn đề vào danh sách đề xuất (demo).")}
+                onClick={() => { setDraftMarked((prev) => ({ ...prev, [selectedProblem.id]: true })); showToast("Đã đánh dấu trong phiên DEMO; chưa lưu nháp thật."); }}
               >
-                ＋ Đưa vào đề xuất
+                {draftMarked[selectedProblem.id] ? "✓ Đã đánh dấu (DEMO)" : "＋ Đánh dấu đề xuất (DEMO)"}
               </button>
             </div>
 

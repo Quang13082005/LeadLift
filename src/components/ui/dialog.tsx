@@ -55,7 +55,7 @@ export function Dialog({ open, onClose, title, description, children, className 
         const rect = event.currentTarget.getBoundingClientRect();
         if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onClose();
       }}>
-      <header className="dialog-header"><h2 id={labelId}>{title}</h2><Button small onClick={onClose} aria-label="Đóng hộp thoại">Đóng ×</Button></header>
+      <header className="dialog-header"><div id={labelId} className="dialog-title">{typeof title === "string" ? <h2>{title}</h2> : title}</div><Button small onClick={onClose} aria-label="Đóng hộp thoại">Đóng ×</Button></header>
       {description && <p id={descriptionId} className="dialog-description">{description}</p>}
       {children}
     </dialog>

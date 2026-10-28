@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useTransition, type FormEvent } from "react";
+import { useState, useCallback, useTransition, type FormEvent } from "react";
 import Link from "next/link";
 import { PageHeading, FeatureBanner } from "@/components/page-foundation";
 import { Button, Badge } from "@/components/ui/primitives";
 import { Dialog } from "@/components/ui/dialog";
+import { Tabs } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
 import { scanWebsiteAction } from "@/app/actions/scanner";
 import type { BusinessItem } from "@/types/business";
@@ -12,17 +13,17 @@ import type { ScanResult, ScanFinding, RuleId } from "@/types/scanner";
 
 interface AuditClientViewProps {
   initialBusinesses: BusinessItem[];
+  initialBusinessId?: string;
 }
 
-export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
+export function AuditClientView({ initialBusinesses, initialBusinessId }: AuditClientViewProps) {
   const showToast = useToast();
 
   // Selected business & URL state
-  const defaultBiz = initialBusinesses.length > 0 ? initialBusinesses[0] : null;
-  const [selectedBizId, setSelectedBizId] = useState<string>(defaultBiz ? defaultBiz.id : "custom");
-  const [targetUrl, setTargetUrl] = useState<string>(
-    defaultBiz?.websiteUrl || "https://lacadanang.quangdev.id.vn"
-  );
+  const defaultBiz = initialBusinesses.find((business) => business.id === initialBusinessId) || initialBusinesses[0] || null;
+  const [selectedBizId, setSelectedBizId] = useState<string>(defaultBiz?.id || "custom");
+  const [draftBizId, setDraftBizId] = useState<string>(defaultBiz?.id || "custom");
+  const [targetUrl, setTargetUrl] = useState<string>(defaultBiz?.websiteUrl || "");
   const [modalUrlInput, setModalUrlInput] = useState<string>(targetUrl);
 
   // Scan state
@@ -33,7 +34,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
 
   // Tab & Filters
   const [activeTab, setActiveTab] = useState<"issues" | "pages" | "history">("issues");
-  const [filterMode, setFilterMode] = useState<"all" | "high" | "medium" | "pass">("all");
+  const [filterMode, setFilterMode] = useState<"all" | "high" | "medium" | "pass" | "unknown">("all");
   const [selectedRuleId, setSelectedRuleId] = useState<RuleId | null>(null);
   const [verifiedMap, setVerifiedMap] = useState<Record<string, boolean>>({});
 
@@ -41,14 +42,15 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
   const [isTargetDialogOpen, setIsTargetDialogOpen] = useState<boolean>(false);
   const [isUrlModalOpen, setIsUrlModalOpen] = useState<boolean>(false);
 
-  // Initial scan trigger (once)
-  const initialScanTriggered = useRef(false);
-
   const executeScan = useCallback(
     (urlToScan: string) => {
       if (!urlToScan.trim() || isPending) return;
 
       setScanError(null);
+      setScanResult(null);
+      setScanTimestamp("");
+      setSelectedRuleId(null);
+      setVerifiedMap({});
       startTransition(async () => {
         try {
           const res = await scanWebsiteAction(urlToScan.trim());
@@ -84,13 +86,6 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
     [isPending, showToast]
   );
 
-  useEffect(() => {
-    if (!initialScanTriggered.current && targetUrl) {
-      initialScanTriggered.current = true;
-      executeScan(targetUrl);
-    }
-  }, [targetUrl, executeScan]);
-
   const currentBiz = initialBusinesses.find((b) => b.id === selectedBizId);
   const currentBizName = currentBiz?.name || "Doanh nghiệp tùy chọn";
   const currentBizCity = currentBiz?.city || "Đà Nẵng";
@@ -99,12 +94,13 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
   const allFindings = scanResult?.findings || [];
   const failFindings = allFindings.filter((f) => f.status === "FAIL");
   const passFindings = allFindings.filter((f) => f.status === "PASS");
+  const urlFindings = allFindings.filter((finding) => finding.status === "FAIL" || finding.status === "UNKNOWN");
 
   const highCount = failFindings.filter(
     (f) => f.severity === "CRITICAL" || f.severity === "HIGH"
   ).length;
   const medCount = failFindings.filter((f) => f.severity === "MEDIUM").length;
-  const verifiedCount = Object.values(verifiedMap).filter(Boolean).length;
+  const verifiedCount = failFindings.filter((finding) => verifiedMap[finding.ruleId]).length;
 
   // Filtered issues to display in Tab 1
   const displayedFindings = allFindings.filter((f) => {
@@ -116,6 +112,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
       return f.status === "FAIL" && f.severity === "MEDIUM";
     }
     if (filterMode === "pass") return f.status === "PASS";
+    if (filterMode === "unknown") return f.status === "UNKNOWN";
     return true;
   });
 
@@ -126,25 +123,17 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
   const isCurrentActiveVerified = activeFinding ? Boolean(verifiedMap[activeFinding.ruleId]) : false;
 
   const toggleVerify = (ruleId: string) => {
-    setVerifiedMap((prev) => {
-      const nextVal = !prev[ruleId];
-      showToast(nextVal ? "Đã ghi nhận xác minh (phiên làm việc hiện tại)." : "Đã hủy xác minh.");
-      return {
-        ...prev,
-        [ruleId]: nextVal,
-      };
-    });
-  };
-
-  const handleAddToOutreach = () => {
-    showToast("Đã thêm vấn đề vào danh sách đề xuất tiếp cận (phiên làm việc).");
+    const nextVal = !verifiedMap[ruleId];
+    setVerifiedMap((prev) => ({ ...prev, [ruleId]: nextVal }));
+    showToast(nextVal ? "Đã ghi nhận xác minh (phiên làm việc hiện tại)." : "Đã hủy xác minh.");
   };
 
   const handleApplyTargetDialog = (e: FormEvent) => {
     e.preventDefault();
     setIsTargetDialogOpen(false);
-    if (selectedBizId !== "custom") {
-      const found = initialBusinesses.find((b) => b.id === selectedBizId);
+    setSelectedBizId(draftBizId);
+    if (draftBizId !== "custom") {
+      const found = initialBusinesses.find((b) => b.id === draftBizId);
       if (found) {
         setTargetUrl(found.websiteUrl);
         executeScan(found.websiteUrl);
@@ -168,9 +157,9 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
           className="button"
           onClick={() => executeScan(targetUrl)}
           disabled={isPending || !targetUrl.trim()}
-          aria-label="Quét lại website"
+          aria-label={scanResult ? "Quét lại website" : "Bắt đầu quét website"}
         >
-          {isPending ? "Đang quét…" : "↻ Quét lại"}
+          {isPending ? "Đang quét…" : scanResult ? "↻ Quét lại" : "Quét website"}
         </button>
         <Link href="/outreach" className="button button-primary">
           Xem đề xuất →
@@ -203,12 +192,12 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
           <div className="sub" style={{ marginTop: 3 }}>
             {scanTimestamp ? (
               <>
-                Lượt quét: {scanTimestamp} • HTTP {scanResult?.httpStatus || 200} • Safe Fetcher (OWASP SSRF Protected)
+                Lượt quét: {scanTimestamp} • HTTP {scanResult?.httpStatus} • Safe Fetcher (OWASP SSRF Protected)
               </>
             ) : isPending ? (
               "Đang kết nối và kiểm tra bảo mật…"
             ) : (
-              "Sẵn sàng quét website"
+              "Chưa có kết quả quét"
             )}
           </div>
         </div>
@@ -225,6 +214,8 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
           </button>
           {isPending ? (
             <Badge tone="amber">ĐANG PHÂN TÍCH</Badge>
+          ) : scanError ? (
+            <Badge tone="red">QUÉT THẤT BẠI</Badge>
           ) : scanResult ? (
             <Badge tone="green">ĐÃ QUÉT XONG</Badge>
           ) : (
@@ -250,7 +241,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
         <div className="stat">
           <div className="stat-label">Nhóm tín hiệu cần xem</div>
           <div className="stat-value" style={{ color: "#c34a45" }}>
-            {failFindings.length}
+            {scanResult ? failFindings.length : "—"}
           </div>
           <div className="stat-note">Vấn đề phát hiện thực tế</div>
         </div>
@@ -258,7 +249,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
         <div className="stat">
           <div className="stat-label">Đã xác minh</div>
           <div className="stat-value" style={{ color: "#00765a" }}>
-            {verifiedCount}
+            {scanResult ? verifiedCount : "—"}
           </div>
           <div className="stat-note">Tạm thời (client-side)</div>
         </div>
@@ -283,40 +274,15 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
       )}
 
       {/* 3 Tab Navigation */}
-      <div className="tabs" role="tablist" aria-label="Các mục kiểm tra website">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "issues"}
-          className={`tab ${activeTab === "issues" ? "on" : ""}`}
-          onClick={() => setActiveTab("issues")}
-        >
-          Các vấn đề & bằng chứng {failFindings.length > 0 && `(${failFindings.length})`}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "pages"}
-          className={`tab ${activeTab === "pages" ? "on" : ""}`}
-          onClick={() => setActiveTab("pages")}
-        >
-          URL đã quét (1)
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "history"}
-          className={`tab ${activeTab === "history" ? "on" : ""}`}
-          onClick={() => setActiveTab("history")}
-        >
-          Lịch sử & so sánh
-        </button>
-      </div>
-
+      <Tabs label="Các mục kiểm tra website" value={activeTab} onChange={setActiveTab} items={[
+        { value: "issues", label: `Các vấn đề & bằng chứng${scanResult ? ` (${failFindings.length})` : ""}` },
+        { value: "pages", label: `URL đã quét (${scanResult ? 1 : 0})` },
+        { value: "history", label: "Lịch sử & so sánh" },
+      ]} />
       {/* TAB 1: Các vấn đề & bằng chứng (Issue-first SEO Layout) */}
       {activeTab === "issues" && (
         <>
-          {failFindings.length === 0 && filterMode !== "pass" ? (
+          {!scanResult ? (
             <section
               className="panel panPad"
               style={{ textAlign: "center", padding: "52px 24px" }}
@@ -326,7 +292,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                 className="empty-icon"
                 style={{ fontSize: 28, width: 52, height: 52, margin: "0 auto 16px" }}
               >
-                ✓
+                {scanResult ? "✓" : "◷"}
               </div>
               <h2
                 style={{
@@ -337,7 +303,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                   letterSpacing: "-.3px",
                 }}
               >
-                Chưa phát hiện vấn đề kỹ thuật
+                {scanError ? "Chưa có kết quả phân tích" : "Chưa quét website"}
               </h2>
               <p
                 style={{
@@ -348,7 +314,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                   lineHeight: 1.6,
                 }}
               >
-                Chưa phát hiện vấn đề trong phạm vi 10 nhóm kiểm tra kỹ thuật của URL này. Kết quả chưa bao gồm toàn bộ website, PageSpeed hoặc phân tích nhiều URL.
+                {scanResult ? "Không có tiêu chí FAIL trong lần quét này. Bạn có thể xem các tiêu chí PASS hoặc UNKNOWN riêng." : "Chọn doanh nghiệp hoặc URL rồi bắt đầu quét. Chưa có kết quả nên chưa thể kết luận website có vấn đề hay đã đạt chuẩn."}
               </p>
               <div
                 style={{
@@ -366,16 +332,17 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                     setFilterMode("pass");
                     setSelectedRuleId(passFindings[0]?.ruleId || null);
                   }}
+                  disabled={!scanResult || passFindings.length === 0}
                 >
-                  Xem 10 tiêu chí đạt chuẩn ({passFindings.length}) →
+                  Xem tiêu chí đạt chuẩn ({passFindings.length}) →
                 </button>
                 <button
                   type="button"
                   className="button"
                   onClick={() => executeScan(targetUrl)}
-                  disabled={isPending}
+                  disabled={isPending || !targetUrl.trim()}
                 >
-                  {isPending ? "Đang quét…" : "↻ Quét lại website"}
+                  {isPending ? "Đang quét…" : scanResult ? "↻ Quét lại website" : "Quét website"}
                 </button>
               </div>
             </section>
@@ -395,13 +362,14 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                     style={{ width: "auto", minWidth: 150 }}
                     value={filterMode}
                     onChange={(e) => {
-                      const mode = e.target.value as "all" | "high" | "medium" | "pass";
+                      const mode = e.target.value as "all" | "high" | "medium" | "pass" | "unknown";
                       setFilterMode(mode);
                       const matching = allFindings.filter((f) => {
                         if (mode === "all") return f.status === "FAIL";
                         if (mode === "high") return f.status === "FAIL" && (f.severity === "CRITICAL" || f.severity === "HIGH");
                         if (mode === "medium") return f.status === "FAIL" && f.severity === "MEDIUM";
                         if (mode === "pass") return f.status === "PASS";
+                        if (mode === "unknown") return f.status === "UNKNOWN";
                         return true;
                       });
                       setSelectedRuleId(matching[0]?.ruleId || null);
@@ -412,6 +380,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                     <option value="high">Mức cao ({highCount})</option>
                     <option value="medium">Trung bình ({medCount})</option>
                     <option value="pass">Đạt chuẩn ({passFindings.length})</option>
+                    <option value="unknown">Chưa xác định ({allFindings.filter((finding) => finding.status === "UNKNOWN").length})</option>
                   </select>
                 </div>
 
@@ -441,6 +410,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                       const isSelected = activeFinding?.ruleId === finding.ruleId;
                       const isVerified = Boolean(verifiedMap[finding.ruleId]);
                       const isPass = finding.status === "PASS";
+                      const isUnknown = finding.status === "UNKNOWN";
                       const isHigh = finding.severity === "CRITICAL" || finding.severity === "HIGH";
 
                       return (
@@ -463,7 +433,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                             aria-hidden="true"
                             style={isPass ? { background: "var(--mint)", color: "var(--green)" } : undefined}
                           >
-                            {isPass ? "✓" : isHigh ? "!" : "•"}
+                            {isPass ? "✓" : isUnknown ? "?" : isHigh ? "!" : "•"}
                           </span>
                           <div style={{ minWidth: 0 }}>
                             <strong>{finding.ruleName}</strong>
@@ -473,15 +443,17 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                           <span className="hideMob">
                             <span
                               className={`chip ${
-                                isPass ? "green" : isHigh ? "bad" : "warn"
+                                isPass ? "green" : isUnknown ? "blue" : isHigh ? "bad" : "warn"
                               }`}
                             >
-                              {isPass ? "Đạt chuẩn" : isHigh ? "Cao" : "Trung bình"}
+                              {isPass ? "Đạt chuẩn" : isUnknown ? "Chưa rõ" : isHigh ? "Cao" : finding.severity === "MEDIUM" ? "Trung bình" : finding.severity === "LOW" ? "Thấp" : "Thông tin"}
                             </span>
                           </span>
                           <span className="hideMob">
                             {isPass ? (
                               <span className="chip green">Hợp lệ</span>
+                            ) : isUnknown ? (
+                              <span className="chip blue">Chưa xác định</span>
                             ) : (
                               <span className={`chip ${isVerified ? "green" : "warn"}`}>
                                 {isVerified ? "Đã xác minh" : "Chưa xác minh"}
@@ -518,7 +490,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                           </div>
                           <div className="evrow">
                             <span>URL kiểm tra</span>
-                            <strong>{targetUrl} (1 trang)</strong>
+                            <strong>{activeFinding.sourceUrl || scanResult?.finalUrl || targetUrl} (1 trang)</strong>
                           </div>
                           <div className="evrow">
                             <span>Mức độ ưu tiên</span>
@@ -569,6 +541,15 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                           <b>Không cần đưa vào đề xuất:</b> Tiêu chí đã đạt chuẩn kỹ thuật thì không cần xác minh hay tạo bản nháp liên hệ doanh nghiệp.
                         </div>
                       </>
+                    ) : activeFinding.status === "UNKNOWN" ? (
+                      <>
+                        <div className="row space" style={{ marginBottom: 8 }}><span className="kicker">CẦN ĐỐI CHIẾU THÊM</span><span className="chip blue">UNKNOWN</span></div>
+                        <h2>{activeFinding.ruleName}</h2>
+                        <p>{activeFinding.description}</p>
+                        <div className="miniTitle">Bằng chứng hiện có</div>
+                        <div className="evidence"><div className="evrow"><span>URL nguồn</span><strong>{activeFinding.sourceUrl || scanResult?.finalUrl || targetUrl}</strong></div><div className="evidence-snippet">{activeFinding.evidence}</div></div>
+                        <div className="alert blue" style={{ marginTop: 14 }}>Kết quả chưa đủ dữ liệu để kết luận PASS hoặc FAIL. Không đưa mục này vào đề xuất như một lỗi đã xác nhận.</div>
+                      </>
                     ) : (
                       /* FAIL Finding Detail: Actionable with Verify checkbox & Add to outreach */
                       <>
@@ -590,7 +571,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                           </div>
                           <div className="evrow">
                             <span>URL ảnh hưởng</span>
-                            <strong>{targetUrl} (1 trang)</strong>
+                            <strong>{activeFinding.sourceUrl || scanResult?.finalUrl || targetUrl} (1 trang)</strong>
                           </div>
                           <div className="evrow">
                             <span>Mức độ ưu tiên</span>
@@ -599,7 +580,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                                 ? "Mức cao"
                                 : activeFinding.severity === "MEDIUM"
                                 ? "Trung bình"
-                                : "Thông tin"}
+                                : activeFinding.severity === "LOW" ? "Thấp" : "Thông tin"}
                             </strong>
                           </div>
                           <div className="evrow">
@@ -664,10 +645,10 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                           <button
                             type="button"
                             className="button button-primary"
-                            disabled={!isCurrentActiveVerified}
-                            onClick={handleAddToOutreach}
+                            disabled
+                            title="Chức năng lưu đề xuất chưa được triển khai"
                           >
-                            ＋ Đưa vào đề xuất
+                            Đưa vào đề xuất · Chưa hỗ trợ
                           </button>
                         </div>
 
@@ -713,7 +694,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                 </tr>
               </thead>
               <tbody>
-                <tr
+                {scanResult ? <tr
                   className="table-row-selectable"
                   onClick={() => setIsUrlModalOpen(true)}
                   title="Nhấn để xem toàn bộ vấn đề của URL này"
@@ -728,14 +709,14 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                           setIsUrlModalOpen(true);
                         }}
                       >
-                        {targetUrl}
+                        {scanResult.finalUrl}
                       </button>
                       <span style={{ color: "#80a394" }} aria-hidden="true">↗</span>
                     </div>
                   </td>
                   <td>
                     <span className={`chip ${scanResult?.httpStatus === 200 ? "green" : "bad"}`}>
-                      {scanResult?.httpStatus || 200}
+                      {scanResult.httpStatus}
                     </span>
                   </td>
                   <td>
@@ -770,7 +751,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                       Xem chi tiết →
                     </button>
                   </td>
-                </tr>
+                </tr> : <tr><td colSpan={5} className="empty-state">Chưa có URL hoàn tất quét.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -790,8 +771,8 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
           <section className="panel panPad" aria-label="Lịch sử kiểm tra">
             <h3>Lịch sử kiểm tra</h3>
             <div className="kv" style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #edf1ed", fontSize: 13 }}>
-              <span>{scanTimestamp || "Chưa quét"}</span>
-              <b>1 lượt quét thực tế (Phase 03A)</b>
+              <span>{scanTimestamp || "Chưa lưu lịch sử"}</span>
+              <b>{scanResult ? "1 lượt trong phiên hiện tại" : "Chưa có lượt quét"}</b>
             </div>
             <div className="alert-box alert-amber" style={{ marginTop: 16 }}>
               <span className="alert-icon">⚠</span>
@@ -822,18 +803,16 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
           <div className="modalTopline" style={{ width: "100%" }}>
             <div>
               <div className="kicker">WEBSITE AUDIT / CHI TIẾT URL</div>
-              <h2 className="url-modal-heading">{targetUrl}</h2>
+              <h2 className="url-modal-heading">{scanResult?.finalUrl || "Chưa có kết quả quét"}</h2>
               <div className="hint">
-                {targetUrl} · Lượt quét thực tế • Phase 03A
+                {scanResult ? `${scanResult.finalUrl} · Lượt quét trong phiên hiện tại` : "Chưa có bằng chứng để hiển thị."}
               </div>
             </div>
           </div>
         }
       >
         <div className="page-status-line">
-          <span className={`chip ${scanResult?.httpStatus === 200 ? "green" : "bad"}`}>
-            HTTP {scanResult?.httpStatus || 200}
-          </span>
+          {scanResult && <span className={`chip ${scanResult.httpStatus >= 200 && scanResult.httpStatus < 400 ? "green" : "bad"}`}>HTTP {scanResult.httpStatus}</span>}
           <span className={`chip ${failFindings.length ? "bad" : "green"}`}>
             {failFindings.length} vấn đề
           </span>
@@ -842,30 +821,30 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
           </span>
         </div>
 
-        {failFindings.length > 0 ? (
+        {urlFindings.length > 0 ? (
           <>
             <div className="url-summary">
               ⚠ Phát hiện {failFindings.length} tín hiệu trên cùng URL. Mở từng mục bên dưới để xem giải thích, bằng chứng và hướng sửa.
             </div>
 
-            {failFindings.map((finding, idx) => (
+            {urlFindings.map((finding, idx) => (
               <details key={finding.ruleId} className="url-issue" open={idx === 0}>
                 <summary>
                   <span className="ic" style={{ flex: "none" }}>
-                    {finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "!" : "•"}
+                    {finding.status === "UNKNOWN" ? "?" : finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "!" : "•"}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <b>{finding.ruleName}</b>
                     <div className="status-caption">
-                      {finding.category} · Tín hiệu cần đối chiếu tại URL
+                      {finding.category} · {finding.status === "UNKNOWN" ? "Chưa đủ dữ liệu để kết luận" : "FAIL cần người dùng đối chiếu"}
                     </div>
                   </div>
                   <span
                     className={`chip ${
-                      finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "bad" : "warn"
+                      finding.status === "UNKNOWN" ? "blue" : finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "bad" : "warn"
                     }`}
                   >
-                    {finding.severity === "CRITICAL" || finding.severity === "HIGH"
+                    {finding.status === "UNKNOWN" ? "Chưa xác định" : finding.severity === "CRITICAL" || finding.severity === "HIGH"
                       ? "Cao"
                       : "Trung bình"}
                   </span>
@@ -883,7 +862,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                   <div className="fix">
                     <b>Hướng cải thiện:</b>
                     <div style={{ marginTop: 4 }}>
-                      {finding.recommendation || "Tiếp tục duy trì cấu hình hiện tại."}
+                      {finding.recommendation || "Cần kiểm tra thêm trước khi đưa ra kết luận."}
                     </div>
                   </div>
                   <div style={{ marginTop: 12 }}>
@@ -892,6 +871,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                       className="button button-small"
                       onClick={() => {
                         setSelectedRuleId(finding.ruleId);
+                        setFilterMode(finding.status === "UNKNOWN" ? "unknown" : "all");
                         setActiveTab("issues");
                         setIsUrlModalOpen(false);
                       }}
@@ -907,7 +887,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
           <div className="alert-box alert-green">
             <span className="alert-icon">✓</span>
             <div>
-              Chưa phát hiện tín hiệu bất thường trong phạm vi 10 nhóm kiểm tra kỹ thuật của URL này.
+              {scanResult ? "Không có FAIL hoặc UNKNOWN tại URL này trong phạm vi lần quét." : "Chưa có kết quả quét cho URL này."}
             </div>
           </div>
         )}
@@ -927,6 +907,9 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
             variant="primary"
             onClick={() => {
               setIsUrlModalOpen(false);
+              const firstFinding = urlFindings[0] || passFindings[0];
+              setSelectedRuleId(firstFinding?.ruleId || null);
+              setFilterMode(firstFinding?.status === "UNKNOWN" ? "unknown" : firstFinding?.status === "PASS" ? "pass" : "all");
               setActiveTab("issues");
             }}
           >
@@ -951,10 +934,10 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
             <select
               id="modal-biz-select"
               className="form-select"
-              value={selectedBizId}
+              value={draftBizId}
               onChange={(e) => {
                 const bId = e.target.value;
-                setSelectedBizId(bId);
+                setDraftBizId(bId);
                 if (bId !== "custom") {
                   const found = initialBusinesses.find((b) => b.id === bId);
                   if (found) {
@@ -983,7 +966,7 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
               value={modalUrlInput}
               onChange={(e) => {
                 setModalUrlInput(e.target.value);
-                setSelectedBizId("custom");
+                setDraftBizId("custom");
               }}
               placeholder="https://example.com"
               required

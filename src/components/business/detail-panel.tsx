@@ -7,9 +7,10 @@ import { LEAD_STATUS_LABELS, type BusinessItem } from "@/types/business";
 interface BusinessDetailPanelProps {
   business: BusinessItem | null;
   onEdit: (business: BusinessItem) => void;
+  demo?: boolean;
 }
 
-export function BusinessDetailPanel({ business, onEdit }: BusinessDetailPanelProps) {
+export function BusinessDetailPanel({ business, onEdit, demo = false }: BusinessDetailPanelProps) {
   if (!business) {
     return (
       <section className="panel">
@@ -57,7 +58,7 @@ export function BusinessDetailPanel({ business, onEdit }: BusinessDetailPanelPro
           <Badge tone={statusConfig.tone}>{statusConfig.label}</Badge>
         </div>
         <div className="header-actions">
-          <Button variant="quiet" small onClick={() => onEdit(business)} title="Chỉnh sửa thông tin hồ sơ">
+          <Button variant="quiet" small onClick={() => onEdit(business)} disabled={demo} title="Chỉnh sửa thông tin hồ sơ">
             ✏ Sửa
           </Button>
         </div>
@@ -82,68 +83,15 @@ export function BusinessDetailPanel({ business, onEdit }: BusinessDetailPanelPro
         <hr className="divider" />
 
         {/* Key-Value metadata */}
-        <div className="kv-grid">
-          <div className="kv-item">
-            <span className="kv-label">Ngành nghề</span>
-            <strong className="kv-val">{business.industry}</strong>
-          </div>
-
-          <div className="kv-item">
-            <span className="kv-label">Khu vực / Địa chỉ</span>
-            <strong className="kv-val">
-              {business.district ? `${business.district}, ` : ""}
-              {business.city}
-              {business.address ? ` (${business.address})` : ""}
-            </strong>
-          </div>
-
-          <div className="kv-item">
-            <span className="kv-label">Điểm cơ hội (Audit)</span>
-            <div className="kv-val">
-              {business.opportunityScore !== null ? (
-                <span
-                  className={`score-badge ${
-                    business.opportunityScore < 60
-                      ? "score-bad"
-                      : business.opportunityScore < 75
-                      ? "score-warn"
-                      : "score-good"
-                  }`}
-                >
-                  {business.opportunityScore}/100
-                </span>
-              ) : (
-                <span className="score-unrated">— Chưa phân tích</span>
-              )}
-            </div>
-          </div>
-
-          <div className="kv-item">
-            <span className="kv-label">Nguồn dữ liệu</span>
-            <strong className="kv-val">{business.dataSource || "Thủ công"}</strong>
-          </div>
-
-          <div className="kv-item">
-            <span className="kv-label">Ngày thu thập</span>
-            <strong className="kv-val">{formattedDate}</strong>
-          </div>
-
-          <div className="kv-item">
-            <span className="kv-label">Số điện thoại</span>
-            <strong className="kv-val">{business.phone || "—"}</strong>
-          </div>
-
-          <div className="kv-item">
-            <span className="kv-label">Email liên hệ</span>
-            <strong className="kv-val">{business.email || "—"}</strong>
-          </div>
-
-          {business.notes && (
-            <div className="kv-item full">
-              <span className="kv-label">Ghi chú</span>
-              <p className="kv-notes">{business.notes}</p>
-            </div>
-          )}
+        <div className="detail-meta">
+          <div className="kv"><span>Ngành nghề</span><b>{business.industry}</b></div>
+          <div className="kv"><span>Khu vực</span><b>{[business.district, business.city].filter(Boolean).join(", ")}</b></div>
+          <div className="kv"><span>Điểm cơ hội</span><b>{business.opportunityScore === null ? "Chưa phân tích" : `${business.opportunityScore}/100`}</b></div>
+          <div className="kv"><span>Nguồn dữ liệu</span><b>{business.dataSource || "Thủ công"}</b></div>
+          <div className="kv"><span>Ngày thu thập</span><b>{formattedDate}</b></div>
+          <div className="kv"><span>Điện thoại</span><b>{business.phone || "—"}</b></div>
+          <div className="kv"><span>Email</span><b>{business.email || "—"}</b></div>
+          {business.notes && <div className="kv"><span>Ghi chú</span><b>{business.notes}</b></div>}
         </div>
 
         {/* Roadmap Progress */}
@@ -168,14 +116,14 @@ export function BusinessDetailPanel({ business, onEdit }: BusinessDetailPanelPro
 
         {/* Action Buttons */}
         <div className="detail-action-buttons">
-          <Link href={`/audit?businessId=${business.id}`} className="button button-primary">
+          <Link href={`${demo ? "/dev/design-v2/audit" : "/audit"}?businessId=${encodeURIComponent(business.id)}`} className="button button-primary">
             ⌕ Mở Website Audit
           </Link>
-          <Link href={`/outreach?businessId=${business.id}`} className="button button-secondary">
+          <Link href={`${demo ? "/dev/design-v2/outreach" : "/outreach"}?businessId=${encodeURIComponent(business.id)}`} className="button button-secondary">
             ✉ Chuẩn bị đề xuất
           </Link>
         </div>
-        <p className="hint">Website Audit và soạn đề xuất chưa triển khai; các nút mở trang nền tảng.</p>
+        <p className="hint">Kết quả Audit chưa được lưu vào hồ sơ. Đề xuất chưa có tính năng lưu hoặc gửi.</p>
 
         {/* Discussion Alert if client replied */}
         {isInterested && (

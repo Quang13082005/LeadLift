@@ -7,6 +7,8 @@ import { BusinessDetailPanel } from "./detail-panel";
 import { CreateBusinessDialog } from "./create-dialog";
 import { EditBusinessDialog } from "./edit-dialog";
 import { CsvImportDialog } from "./csv-import-dialog";
+import { Tabs } from "@/components/ui/tabs";
+import { PipelineView, type PipelineOpportunity } from "./pipeline-view";
 import { fetchBusinessesAction } from "@/app/actions/business";
 import {
   LEAD_STATUS_LABELS,
@@ -16,12 +18,16 @@ import {
 
 interface BusinessListPageProps {
   initialData: BusinessQueryResult;
+  initialSelectedBusinessId?: string;
+  initialTab?: "discovery" | "pipeline";
+  demo?: boolean;
+  pipelineOpportunity?: PipelineOpportunity;
 }
 
-export function BusinessListPage({ initialData }: BusinessListPageProps) {
+export function BusinessListPage({ initialData, initialSelectedBusinessId, initialTab = "discovery", demo = false, pipelineOpportunity }: BusinessListPageProps) {
   const [data, setData] = useState<BusinessQueryResult>(initialData);
   const [selectedBusiness, setSelectedBusiness] = useState<BusinessItem | null>(
-    initialData.items[0] || null
+    initialData.items.find((business) => business.id === initialSelectedBusinessId) || initialData.items[0] || null
   );
 
   // Filters state
@@ -32,7 +38,7 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
   const [page, setPage] = useState(1);
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<"discovery" | "pipeline">("discovery");
+  const [activeTab, setActiveTab] = useState<"discovery" | "pipeline">(initialTab);
 
   // Dialogs state
   const [openCreate, setOpenCreate] = useState(false);
@@ -43,6 +49,14 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState(initialData.error ?? null);
   const requestId = useRef(0);
+  const skipInitialLoad = useRef(true);
+  const visibleItems = demo ? data.items.filter((business) =>
+    (!search || `${business.name} ${business.normalizedDomain}`.toLocaleLowerCase().includes(search.toLocaleLowerCase())) &&
+    (area === "Tất cả" || business.city === area || business.district === area) &&
+    (sector === "Tất cả" || business.industry === sector) &&
+    (status === "Tất cả" || business.leadStatus === status)
+  ) : data.items;
+  const visibleSelection = visibleItems.find((business) => business.id === selectedBusiness?.id) || null;
 
   const loadBusinesses = useCallback((newPage = 1, preferredId?: string) => {
     const currentRequest = ++requestId.current;
@@ -75,10 +89,15 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
 
   // Re-fetch when filters change
   useEffect(() => {
+    if (demo) return;
+    if (skipInitialLoad.current) {
+      skipInitialLoad.current = false;
+      return;
+    }
     const requests = requestId;
     const timeout = window.setTimeout(() => loadBusinesses(1), 250);
     return () => { window.clearTimeout(timeout); requests.current++; };
-  }, [loadBusinesses]);
+  }, [demo, loadBusinesses]);
 
   const handleEditOpen = (business: BusinessItem) => {
     setBusinessToEdit(business);
@@ -111,13 +130,13 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
       <div className="page-heading">
         <div>
           <h1>Khách hàng & Cơ hội</h1>
-          <p>Quản lý hồ sơ doanh nghiệp và nhập dữ liệu thủ công hoặc từ CSV. Khám phá tự động chưa triển khai.</p>
+          <p>{demo ? "Bản xem trước dữ liệu mẫu · Không ghi cơ sở dữ liệu" : "Quản lý hồ sơ doanh nghiệp và nhập dữ liệu thủ công hoặc từ CSV. Khám phá tự động chưa triển khai."}</p>
         </div>
         <div className="actions">
-          <Button variant="secondary" onClick={() => setOpenCsvImport(true)}>
+          <Button variant="secondary" onClick={() => setOpenCsvImport(true)} disabled={demo}>
             ⇧ Nhập CSV
           </Button>
-          <Button variant="primary" onClick={() => setOpenCreate(true)}>
+          <Button variant="primary" onClick={() => setOpenCreate(true)} disabled={demo}>
             ＋ Thêm doanh nghiệp
           </Button>
         </div>
@@ -148,29 +167,10 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
       </div>
 
       {/* Tabs */}
-      <div className="module-tabs">
-        <button
-          type="button"
-          className={`module-tab ${activeTab === "discovery" ? "active" : ""}`}
-          aria-pressed={activeTab === "discovery"}
-          onClick={() => setActiveTab("discovery")}
-        >
-          Khám phá & danh sách
-        </button>
-        <button
-          type="button"
-          className={`module-tab ${activeTab === "pipeline" ? "active" : ""}`}
-          aria-pressed={activeTab === "pipeline"}
-          onClick={() => setActiveTab("pipeline")}
-        >
-          Cơ hội hợp tác{" "}
-          {!error && data.stats.inDiscussionCount > 0 && (
-            <Badge tone="green" className="ml-6">
-              {data.stats.inDiscussionCount}
-            </Badge>
-          )}
-        </button>
-      </div>
+      <Tabs label="Màn hình Khách hàng & Cơ hội" value={activeTab} onChange={setActiveTab} items={[
+        { value: "discovery", label: "Khám phá & danh sách" },
+        { value: "pipeline", label: `Cơ hội hợp tác${!error && data.stats.inDiscussionCount > 0 ? ` · ${data.stats.inDiscussionCount}` : ""}` },
+      ]} />
 
       {activeTab === "discovery" ? (
         <>
@@ -256,14 +256,14 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
             <section className="panel" aria-label="Danh sách doanh nghiệp">
               <header className="panel-heading table-header">
                 <div>
-                  <h2>Danh sách doanh nghiệp ({error ? "—" : data.total})</h2>
+                  <h2>Danh sách doanh nghiệp ({error ? "—" : demo ? visibleItems.length : data.total})</h2>
                   <p className="hint">Chọn một dòng để xem chi tiết hồ sơ hoặc chuẩn bị audit website.</p>
                 </div>
               </header>
 
               <div className="table-responsive">
-                {error ? <EmptyState title="Không thể tải dữ liệu" description="Chưa thể xác định số lượng doanh nghiệp. Vui lòng thử lại." /> : data.items.length > 0 ? (
-                  <table className="table lead-table">
+                {error ? <EmptyState title="Không thể tải dữ liệu" description="Chưa thể xác định số lượng doanh nghiệp. Vui lòng thử lại." /> : visibleItems.length > 0 ? (
+                  <table className="table lead-table business-table">
                     <thead>
                       <tr>
                         <th>Doanh nghiệp / Website</th>
@@ -275,7 +275,7 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
                       </tr>
                     </thead>
                     <tbody>
-                      {data.items.map((b) => {
+                      {visibleItems.map((b) => {
                         const isSelected = selectedBusiness?.id === b.id;
                         const statusItem = LEAD_STATUS_LABELS[b.leadStatus] || {
                           label: b.leadStatus,
@@ -333,7 +333,7 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
                                   Xem
                                 </Button>
                                 <Link
-                                  href={`/audit?businessId=${b.id}`}
+                                  href={`${demo ? "/dev/design-v2/audit" : "/audit"}?businessId=${encodeURIComponent(b.id)}`}
                                   className="button button-secondary button-small"
                                   title="Mở Website Audit"
                                 >
@@ -396,43 +396,11 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
             </section>
 
             {/* Right Column: Detail Panel */}
-            <BusinessDetailPanel business={error ? null : selectedBusiness} onEdit={handleEditOpen} />
+            <BusinessDetailPanel business={error ? null : demo ? visibleSelection : selectedBusiness} onEdit={handleEditOpen} demo={demo} />
           </div>
         </>
       ) : (
-        /* Tab Pipeline placeholder for Phase 06 */
-        <div className="split">
-          <section className="panel">
-            <header className="panel-heading">
-              <h2>Pipeline cơ hội hợp tác</h2>
-              <p className="hint">Theo dõi các doanh nghiệp đã tiếp cận và chuyển thành cơ hội kinh doanh.</p>
-            </header>
-            <div className="panel-body">
-              <EmptyState
-                icon="✉"
-                title="Tính năng Pipeline thuộc Phase 06"
-                description="Khu vực quản lý luồng cơ hội hợp tác, lịch sử hội thoại và bàn giao phụ trách sẽ được kết nối hoàn chỉnh tại Phase 06."
-              >
-                <Button variant="primary" onClick={() => setActiveTab("discovery")}>
-                  Quay lại Khám phá & Danh sách
-                </Button>
-              </EmptyState>
-            </div>
-          </section>
-
-          <section className="panel">
-            <header className="panel-heading">
-              <h2>Cơ hội cần bạn xử lý</h2>
-            </header>
-            <div className="panel-body">
-              <EmptyState
-                icon="🤝"
-                title="Chưa có cơ hội cần xử lý"
-                description="Khi doanh nghiệp phản hồi quan tâm tới đề xuất, thông báo bàn giao sẽ xuất hiện tại đây."
-              />
-            </div>
-          </section>
-        </div>
+        <PipelineView opportunity={demo ? pipelineOpportunity : undefined} />
       )}
 
       {/* Dialogs */}

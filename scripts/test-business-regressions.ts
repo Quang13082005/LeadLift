@@ -20,6 +20,7 @@ async function main() {
     },
   });
   const service = await import("../src/lib/services/business-service");
+  const dashboard = await import("../src/lib/services/dashboard-service");
   const actions = await import("../src/app/actions/business");
   const api = await import("../src/app/api/businesses/route");
   const { NextRequest } = await import("next/server");
@@ -98,6 +99,20 @@ async function main() {
   await test("API invalid query status and fractional page return 400", async () => { assert.equal((await api.GET(req("GET", undefined, "?page=1.5"))).status, 400); assert.equal((await api.GET(req("GET", undefined, "?status=UNKNOWN"))).status, 400); });
   await test("DB uniqueness exists in unchanged schema and migration", () => { assert.match(readFileSync("prisma/schema.prisma", "utf8"), /normalizedDomain\s+String\s+@unique/); assert.match(readFileSync("prisma/migrations/20261027000000_init/migration.sql", "utf8"), /CREATE UNIQUE INDEX "businesses_normalizedDomain_key"/); });
   await test("unknown errors are generic", () => assert.equal(publicBusinessError(new Error("secret connection detail")).status, 503));
+  await test("dashboard reads Business counts and leaves unimplemented metrics unknown", async () => {
+    fixture.seed();
+    const data = await dashboard.getDashboardData();
+    assert.equal(data.total, 14); assert.equal(data.items.length, 4);
+    assert.equal(data.prepared, null); assert.equal(data.replies, null); assert.equal(writes(), 0);
+  });
+  await test("dashboard denies production before querying", async () => {
+    env.NODE_ENV = "production";
+    await assert.rejects(dashboard.getDashboardData(), { statusCode: 403 });
+    assert.equal(fixture.state.calls.length, 0);
+  });
+  await test("dashboard storage failure cannot become zero metrics", async () => {
+    fixture.state.failure = true; await assert.rejects(dashboard.getDashboardData());
+  });
   hooks.deregister();
   console.log(`Regression tests (MOCK PRISMA, NO NEON): ${passed} passed; ${failed} failed.`);
   process.exitCode = failed ? 1 : 0;
