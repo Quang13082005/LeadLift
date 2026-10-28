@@ -1,0 +1,265 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+}
+
+enum LeadStatus {
+  NEW_DISCOVERED
+  AUDITED
+  QUALIFIED
+  CONTACT_READY
+  OUTREACH_SENT
+  IN_DISCUSSION
+  CONVERTED
+  UNQUALIFIED
+  DO_NOT_CONTACT
+}
+
+enum AuditType {
+  FULL_SCAN
+  PSI_ONLY
+  HTTP_HEAD_ONLY
+}
+
+enum AuditStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum FindingCategory {
+  PERFORMANCE
+  MOBILE_UX
+  SEO_FOUNDATION
+  SECURITY_SSL
+  TECHNICAL_ERROR
+}
+
+enum FindingSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum FindingStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
+enum ContactType {
+  EMAIL
+  PHONE
+  ZALO
+  FACEBOOK_PAGE
+  WEBSITE_FORM
+  ADDRESS
+}
+
+enum OutreachChannel {
+  EMAIL
+  ZALO_MANUAL
+  PHONE_SCRIPT
+}
+
+enum OutreachDraftStatus {
+  DRAFT
+  READY_TO_SEND
+  SENT_MANUAL
+  CANCELLED
+}
+
+enum OutreachEventType {
+  DRAFT_CREATED
+  DRAFT_REVIEWED
+  MANUALLY_SENT
+  CLIENT_REPLIED
+  MEETING_SCHEDULED
+  DECLINED
+  BOUNCED_NO_REPLY
+}
+
+model User {
+  id             String          @id @default(cuid())
+  email          String          @unique
+  passwordHash   String
+  name           String
+  role           Role            @default(ADMIN)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  verifiedFindings AuditFinding[]  @relation("FindingVerifier")
+  outreachEvents   OutreachEvent[]
+
+  @@map("users")
+}
+
+model Business {
+  id               String          @id @default(cuid())
+  name             String
+  industry         String          // vd: "Cho thuê xe máy", "Khách sạn", "Nhà hàng", "Dịch vụ địa phương"
+  category         String?         // Chi tiết dịch vụ
+  address          String?
+  city             String          @default("Đà Nẵng")
+  district         String?         // vd: "Sơn Trà", "Ngũ Hành Sơn", "Hải Châu"
+  websiteUrl       String
+  normalizedDomain String          @unique @db.VarChar(255) // vd: "thuexemaydanang.vn" - Đảm bảo chống trùng domain ở DB
+  phone            String?
+  email            String?
+  dataSource       String?         // Nguồn dữ liệu: "Google Maps", "Thủ công", "CSV_IMPORT"
+  collectedAt      DateTime        @default(now()) // Thời điểm thu thập dữ liệu
+  leadStatus       LeadStatus      @default(NEW_DISCOVERED)
+  opportunityScore Int?            // Nullable: null = chưa audit/chưa tính điểm, 0 = đã tính và đạt 0 điểm
+  notes            String?         @db.Text
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  audits         WebsiteAudit[]
+  findings       AuditFinding[]
+  contactPoints  ContactPoint[]
+  outreachDrafts OutreachDraft[]
+  outreachEvents OutreachEvent[]
+
+  @@index([normalizedDomain])
+  @@index([industry, city])
+  @@index([opportunityScore(sort: Desc)])
+  @@index([leadStatus])
+  @@map("businesses")
+}
+
+model WebsiteAudit {
+  id                  String         @id @default(cuid())
+  businessId          String
+  business            Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  auditType           AuditType      @default(FULL_SCAN)
+  status              AuditStatus    @default(PENDING)
+
+  // Điểm số Lighthouse / PageSpeed (0 - 100) - Nullable: phân biệt chưa có dữ liệu với điểm 0
+  performanceScore    Int?
+  seoScore            Int?
+  accessibilityScore  Int?
+  bestPracticesScore  Int?
+
+  // Chỉ số chẩn đoán kỹ thuật
+  loadTimeMs          Int?
+  httpStatusCode      Int?
+  isHttps             Boolean?       // Nullable: không mặc định true khi chưa kiểm tra
+  isMobileFriendly    Boolean?
+
+  // Core Web Vitals (Theo chuẩn mới: INP thay cho FID) - Nullable: phân biệt null với 0
+  lcpMs               Float?         // Largest Contentful Paint (ms)
+  clsScore            Float?         // Cumulative Layout Shift
+  inpMs               Float?         // Interaction to Next Paint (ms - thay thế FID)
+  fcpMs               Float?         // First Contentful Paint (ms)
+  ttfbMs              Float?         // Time to First Byte (ms)
+
+  rawDataJson         Json?          // Lưu raw audit payload chẩn đoán từ Google PageSpeed
+  errorMessage        String?        @db.Text
+  auditedAt           DateTime?
+  createdAt           DateTime       @default(now())
+
+  findings            AuditFinding[]
+
+  @@index([businessId, createdAt(sort: Desc)])
+  @@index([auditedAt])
+  @@map("website_audits")
+}
+
+model AuditFinding {
+  id                  String          @id @default(cuid())
+  auditId             String
+  audit               WebsiteAudit    @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  businessId          String
+  business            Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  category            FindingCategory
+  severity            FindingSeverity
+  title               String          // vd: "Tốc độ tải trang di động quá chậm (> 5.2s)"
+  description         String          @db.Text
+  evidence            String          @db.Text // Thông số thực đo được, tài nguyên nặng, bằng chứng kỹ thuật
+  impactExplanation   String          @db.Text // Giải thích ảnh hưởng kinh doanh thực tế
+  recommendedSolution String          @db.Text // Giải pháp đề xuất khả thi
+
+  // Trạng thái kiểm duyệt và xác minh thủ công
+  status              FindingStatus   @default(PENDING) // PENDING, CONFIRMED, REJECTED
+  verifiedAt          DateTime?
+  verifiedByUserId    String?
+  verifiedByUser      User?           @relation("FindingVerifier", fields: [verifiedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt           DateTime        @default(now())
+
+  @@index([businessId])
+  @@index([severity])
+  @@index([status])
+  @@map("audit_findings")
+}
+
+model ContactPoint {
+  id               String       @id @default(cuid())
+  businessId       String
+  business         Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  type             ContactType
+  value            String       // Số điện thoại, email, link Fanpage, v.v.
+  personName       String?      // Tên người liên hệ (nếu có công khai)
+  roleTitle        String?      // Chức danh (Chủ quán, Quản lý đặt xe)
+  source           String?      // Nguồn thông tin: "Website footer", "Fanpage", "Google Maps"
+  isVerified       Boolean      @default(false)
+  verifiedAt       DateTime?
+  doNotContact     Boolean      @default(false) // Quy tắc chặn: không tiếp cận lại đầu mối này
+  notes            String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([businessId])
+  @@index([doNotContact])
+  @@map("contact_points")
+}
+
+model OutreachDraft {
+  id                   String              @id @default(cuid())
+  businessId           String
+  business             Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  channel              OutreachChannel     @default(EMAIL)
+  subject              String              // Tiêu đề email / tin nhắn
+  body                 String              @db.Text // Nội dung cá nhân hóa đính kèm các finding thực tế
+  personalizedPointers Json?               // Mảng findingId và bằng chứng được chọn làm dẫn chứng
+  status               OutreachDraftStatus @default(DRAFT)
+  sentAt               DateTime?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  events               OutreachEvent[]
+
+  @@index([businessId])
+  @@index([status])
+  @@map("outreach_drafts")
+}
+
+model OutreachEvent {
+  id             String            @id @default(cuid())
+  draftId        String?
+  draft          OutreachDraft?    @relation(fields: [draftId], references: [id], onDelete: SetNull)
+  businessId     String
+  business       Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  eventType      OutreachEventType
+  notes          String?           @db.Text
+  loggedByUserId String?
+  loggedByUser   User?             @relation(fields: [loggedByUserId], references: [id], onDelete: SetNull)
+  occurredAt     DateTime          @default(now())
+  createdAt      DateTime          @default(now())
+
+  @@index([businessId])
+  @@index([draftId])
+  @@map("outreach_events")
+}
