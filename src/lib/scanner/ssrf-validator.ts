@@ -15,6 +15,11 @@ export interface IpValidationResult {
   normalizedIp?: string;
 }
 
+export interface UrlValidationOptions {
+  /** Exact hostname allowed by a scoped crawl. Never permits subdomains. */
+  allowedHost?: string;
+}
+
 /**
  * Checks if an IPv4 address falls within private, loopback, link-local,
  * multicast, or other non-public/reserved IP ranges.
@@ -234,7 +239,7 @@ export function isPrivateOrRestrictedIp(ipStr: string): IpValidationResult {
  * Validates a target URL against OWASP SSRF Prevention rules.
  * Enforces protocol, port, credentials, hostnames, and IP boundaries.
  */
-export function validateTargetUrl(rawUrl: string): UrlValidationResult {
+export function validateTargetUrl(rawUrl: string, options: UrlValidationOptions = {}): UrlValidationResult {
   if (typeof rawUrl !== "string") {
     return { valid: false, code: "INVALID_TYPE", reason: "URL phải là chuỗi văn bản." };
   }
@@ -293,6 +298,17 @@ export function validateTargetUrl(rawUrl: string): UrlValidationResult {
   const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
   if (!hostname) {
     return { valid: false, code: "EMPTY_HOSTNAME", reason: "Tên miền (hostname) không được để trống." };
+  }
+
+  if (options.allowedHost) {
+    const allowedHost = options.allowedHost.toLowerCase().replace(/\.$/, "");
+    if (hostname !== allowedHost) {
+      return {
+        valid: false,
+        code: "CRAWL_HOST_DISALLOWED",
+        reason: `Hostname '${hostname}' nằm ngoài phạm vi website được phép quét.`,
+      };
+    }
   }
 
   // Block localhost and loopback hostnames

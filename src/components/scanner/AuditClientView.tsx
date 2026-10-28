@@ -8,6 +8,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
 import { scanWebsiteAction } from "@/app/actions/scanner";
+import { MultiUrlAuditPanel } from "@/components/scanner/MultiUrlAuditPanel";
 import type { BusinessItem } from "@/types/business";
 import type { ScanResult, ScanFinding, RuleId } from "@/types/scanner";
 
@@ -27,6 +28,8 @@ export function AuditClientView({ initialBusinesses, initialBusinessId }: AuditC
   const [modalUrlInput, setModalUrlInput] = useState<string>(targetUrl);
 
   // Scan state
+  const [auditMode, setAuditMode] = useState<"single" | "multi">("single");
+  const [isCrawlRunning, setIsCrawlRunning] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanError, setScanError] = useState<{ message: string; code?: string } | null>(null);
@@ -131,6 +134,7 @@ export function AuditClientView({ initialBusinesses, initialBusinessId }: AuditC
   const handleApplyTargetDialog = (e: FormEvent) => {
     e.preventDefault();
     setIsTargetDialogOpen(false);
+    setAuditMode("single");
     setSelectedBizId(draftBizId);
     if (draftBizId !== "custom") {
       const found = initialBusinesses.find((b) => b.id === draftBizId);
@@ -154,12 +158,27 @@ export function AuditClientView({ initialBusinesses, initialBusinessId }: AuditC
       >
         <button
           type="button"
-          className="button"
-          onClick={() => executeScan(targetUrl)}
-          disabled={isPending || !targetUrl.trim()}
-          aria-label={scanResult ? "Quét lại website" : "Bắt đầu quét website"}
+          className={`button ${auditMode === "single" ? "button-primary" : ""}`}
+          onClick={() => {
+            if (auditMode !== "single") {
+              setAuditMode("single");
+              return;
+            }
+            executeScan(targetUrl);
+          }}
+          disabled={isPending || isCrawlRunning || (auditMode === "single" && !targetUrl.trim())}
+          aria-label={auditMode === "single" ? scanResult ? "Quét lại website" : "Bắt đầu quét website" : "Quay lại kiểm toán một URL"}
         >
-          {isPending ? "Đang quét…" : scanResult ? "↻ Quét lại" : "Quét website"}
+          {auditMode === "multi" ? "Quét 1 URL" : isPending ? "Đang quét…" : scanResult ? "↻ Quét lại URL" : "Quét 1 URL"}
+        </button>
+        <button
+          type="button"
+          className={`button ${auditMode === "multi" ? "button-primary" : ""}`}
+          onClick={() => setAuditMode("multi")}
+          disabled={isCrawlRunning}
+          aria-pressed={auditMode === "multi"}
+        >
+          Quét nhiều URL
         </button>
         <Link href="/outreach" className="button button-primary">
           Xem đề xuất →
@@ -190,7 +209,9 @@ export function AuditClientView({ initialBusinesses, initialBusinessId }: AuditC
             {targetUrl} · {currentBizCity}
           </span>
           <div className="sub" style={{ marginTop: 3 }}>
-            {scanTimestamp ? (
+            {auditMode === "multi" ? (
+              "Crawl giới hạn chạy trực tiếp trong phiên; không lưu lịch sử."
+            ) : scanTimestamp ? (
               <>
                 Lượt quét: {scanTimestamp} • HTTP {scanResult?.httpStatus} • Safe Fetcher (OWASP SSRF Protected)
               </>
@@ -205,6 +226,7 @@ export function AuditClientView({ initialBusinesses, initialBusinessId }: AuditC
           <button
             type="button"
             className="button button-small"
+            disabled={isCrawlRunning}
             onClick={() => {
               setModalUrlInput(targetUrl);
               setIsTargetDialogOpen(true);
@@ -212,7 +234,9 @@ export function AuditClientView({ initialBusinesses, initialBusinessId }: AuditC
           >
             Đổi doanh nghiệp / URL
           </button>
-          {isPending ? (
+          {auditMode === "multi" ? (
+            <Badge tone="blue">MULTI-URL</Badge>
+          ) : isPending ? (
             <Badge tone="amber">ĐANG PHÂN TÍCH</Badge>
           ) : scanError ? (
             <Badge tone="red">QUÉT THẤT BẠI</Badge>
@@ -224,6 +248,10 @@ export function AuditClientView({ initialBusinesses, initialBusinessId }: AuditC
         </div>
       </div>
 
+      {auditMode === "multi" ? (
+        <MultiUrlAuditPanel initialUrl={targetUrl} onUrlChange={setTargetUrl} onRunningChange={setIsCrawlRunning} />
+      ) : (
+        <>
       {/* 4 Stat Cards */}
       <div className="stats">
         <div className="stat">
@@ -917,6 +945,9 @@ export function AuditClientView({ initialBusinesses, initialBusinessId }: AuditC
           </Button>
         </div>
       </Dialog>
+
+      </>
+      )}
 
       {/* Modal 2: Target Business / Custom URL Dialog */}
       <Dialog

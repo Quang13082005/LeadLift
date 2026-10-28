@@ -1,6 +1,6 @@
 import http from "node:http";
 import { isPrivateOrRestrictedIp, validateTargetUrl } from "../src/lib/scanner/ssrf-validator";
-import { parseHtmlContent, analyzeWebsite } from "../src/lib/scanner/html-analyzer";
+import { parseHtmlContent, analyzeWebsite, SEO_THRESHOLDS } from "../src/lib/scanner/html-analyzer";
 import { safeFetchWebsite, ScannerFetchError } from "../src/lib/scanner/safe-fetcher";
 import { scanWebsite, enforceScannerDevOnly, ScannerServiceError } from "../src/lib/scanner/scanner-service";
 
@@ -121,7 +121,7 @@ async function runScannerTestSuite() {
   // ---------------------------------------------------------------------------
   // SUITE 3: HTML Parser & 10 Technical Checks
   // ---------------------------------------------------------------------------
-  console.log("\n--- Suite 3: HTML Parser & Technical Checks Engine ---");
+  console.log("\n--- Suite 3: HTML Parser & Evidence-backed Technical/SEO Checks ---");
 
   // Test 3.1: Perfect Page Fixture
   const perfectHtml = `
@@ -139,7 +139,7 @@ async function runScannerTestSuite() {
     </head>
     <body>
       <h1>Dịch vụ cho thuê xe máy Đà Nẵng uy tín</h1>
-      <p>Nội dung trang web giới thiệu...</p>
+      <p>${Array(205).fill("nội dung").join(" ")}</p>
     </body>
     </html>
   `;
@@ -163,7 +163,9 @@ async function runScannerTestSuite() {
   });
 
   assert(perfectAnalysis.summary.failCount === 0, "Perfect fixture produces 0 FAIL findings");
-  assert(perfectAnalysis.summary.passCount === 10, "Perfect fixture passes all 10 checks");
+  assert(perfectAnalysis.summary.passCount === 14, "Perfect fixture passes all 14 page checks");
+  assert(perfectAnalysis.summary.reviewRequiredCount === 0, "Perfect fixture has no heuristic review findings");
+  assert(perfectAnalysis.findings.every((finding) => Boolean(finding.recommendation) && Boolean(finding.timestamp)), "Every finding includes recommendation and scan timestamp");
 
   // Test 3.2: Missing Title
   const noTitleHtml = `<html><head><meta name="description" content="Trang web không có tiêu đề nhưng có mô tả dài đủ tiêu chuẩn năm mươi ký tự."></head><body><h1>Heading</h1></body></html>`;
@@ -191,7 +193,7 @@ async function runScannerTestSuite() {
     htmlBody: shortTitleHtml,
   });
   const shortTitleFinding = shortTitleAnalysis.findings.find((f) => f.ruleId === "SEO_TITLE_LENGTH");
-  assert(shortTitleFinding?.status === "FAIL", "Short title flagged as FAIL");
+  assert(shortTitleFinding?.status === "REVIEW_REQUIRED", "Short title length is a review-only guideline");
 
   // Test 3.4: Missing Meta Description
   const noDescHtml = `<html><head><title>Tiêu đề trang web hợp chuẩn từ mười ký tự trở lên</title></head><body><h1>Heading</h1></body></html>`;
@@ -205,7 +207,7 @@ async function runScannerTestSuite() {
     htmlBody: noDescHtml,
   });
   const descFinding = noDescAnalysis.findings.find((f) => f.ruleId === "SEO_META_DESCRIPTION");
-  assert(descFinding?.status === "FAIL", "Missing meta description flagged as FAIL");
+  assert(descFinding?.status === "REVIEW_REQUIRED", "Missing meta description requires review instead of claiming SEO harm");
 
   // Test 3.5: Robots Noindex Detection (Meta Tag & Header)
   const noindexMetaHtml = `<html><head><title>Test Noindex</title><meta name="robots" content="noindex, nofollow"></head><body></body></html>`;
@@ -220,8 +222,8 @@ async function runScannerTestSuite() {
   });
   const noindexFinding = noindexAnalysis.findings.find((f) => f.ruleId === "SEO_ROBOTS_NOINDEX");
   assert(
-    noindexFinding?.status === "FAIL" && noindexFinding.severity === "CRITICAL",
-    "Robots noindex meta tag flagged as CRITICAL FAIL"
+    noindexFinding?.status === "REVIEW_REQUIRED" && noindexFinding.severity === "HIGH",
+    "Robots noindex meta tag is review-required rather than an assumed failure"
   );
 
   const noindexHeaderAnalysis = analyzeWebsite({
@@ -235,8 +237,8 @@ async function runScannerTestSuite() {
   });
   const noindexHeaderFinding = noindexHeaderAnalysis.findings.find((f) => f.ruleId === "SEO_ROBOTS_NOINDEX");
   assert(
-    noindexHeaderFinding?.status === "FAIL" && noindexHeaderFinding.severity === "CRITICAL",
-    "X-Robots-Tag header noindex flagged as CRITICAL FAIL"
+    noindexHeaderFinding?.status === "REVIEW_REQUIRED" && noindexHeaderFinding.severity === "HIGH",
+    "X-Robots-Tag header noindex is review-required"
   );
 
   // Test 3.6: Multiple H1 Tags
@@ -261,9 +263,99 @@ async function runScannerTestSuite() {
   });
   const h1Finding = multiH1Analysis.findings.find((f) => f.ruleId === "SEO_H1_COUNT");
   assert(
-    h1Finding?.status === "FAIL" && h1Finding.evidence.includes("3 thẻ <h1>"),
-    "Multiple H1 tags flagged as FAIL with exact count evidence"
+    h1Finding?.status === "REVIEW_REQUIRED" && h1Finding.evidence.includes("3 thẻ <h1>"),
+    "Multiple H1 tags are review-required with exact count evidence"
   );
+
+  assert(SEO_THRESHOLDS.titleMinChars === 10 && SEO_THRESHOLDS.titleMaxChars === 70, "Published title guideline is 10–70 characters");
+  assert(SEO_THRESHOLDS.metaDescriptionMinChars === 50 && SEO_THRESHOLDS.metaDescriptionMaxChars === 160, "Published meta description guideline is 50–160 characters");
+  assert(SEO_THRESHOLDS.thinContentWordCount === 200, "Published thin-content heuristic threshold is under 200 visible words");
+
+  const canonicalMissing = analyzeWebsite({
+    targetUrl: "https://example.com/page",
+    finalUrl: "https://example.com/page",
+    httpStatus: 200,
+    statusText: "OK",
+    responseTimeMs: 300,
+    headers: {},
+    htmlBody: "<html><head><title>Canonical Optional</title></head><body><h1>Page</h1></body></html>",
+  }).findings.find((finding) => finding.ruleId === "SEO_CANONICAL");
+  assert(canonicalMissing?.status === "UNKNOWN", "Missing canonical remains unknown because canonical is optional");
+
+  const canonicalMismatch = analyzeWebsite({
+    targetUrl: "https://example.com/page",
+    finalUrl: "https://example.com/page",
+    httpStatus: 200,
+    statusText: "OK",
+    responseTimeMs: 300,
+    headers: {},
+    htmlBody: '<html><head><title>Canonical Mismatch</title><link rel="canonical" href="/other"></head><body><h1>Page</h1></body></html>',
+  }).findings.find((finding) => finding.ruleId === "SEO_CANONICAL_MISMATCH");
+  assert(canonicalMismatch?.status === "REVIEW_REQUIRED" && canonicalMismatch.evidence.includes("https://example.com/other"), "Canonical mismatch is review-required with resolved URL evidence");
+
+  const canonicalMalformed = analyzeWebsite({
+    targetUrl: "https://example.com/page",
+    finalUrl: "https://example.com/page",
+    httpStatus: 200,
+    statusText: "OK",
+    responseTimeMs: 300,
+    headers: {},
+    htmlBody: '<html><head><title>Canonical Malformed</title><link rel="canonical" href="javascript:alert(1)"></head><body><h1>Page</h1></body></html>',
+  }).findings.find((finding) => finding.ruleId === "SEO_CANONICAL");
+  assert(canonicalMalformed?.status === "FAIL", "Canonical with unsupported protocol is malformed");
+
+  const headingGap = analyzeWebsite({
+    targetUrl: "https://example.com/page",
+    finalUrl: "https://example.com/page",
+    httpStatus: 200,
+    statusText: "OK",
+    responseTimeMs: 300,
+    headers: {},
+    htmlBody: "<html><head><title>Heading Gap</title></head><body><h1>Title</h1><h3>Skipped</h3></body></html>",
+  }).findings.find((finding) => finding.ruleId === "SEO_HEADING_HIERARCHY");
+  assert(headingGap?.status === "REVIEW_REQUIRED" && headingGap.evidence.includes("H1→H3"), "Skipped heading level is review-required with sequence evidence");
+
+  const thinFinding = analyzeWebsite({
+    targetUrl: "https://example.com/page",
+    finalUrl: "https://example.com/page",
+    httpStatus: 200,
+    statusText: "OK",
+    responseTimeMs: 300,
+    headers: {},
+    htmlBody: "<html><head><title>Thin Page</title></head><body><h1>Intro</h1><p>Only a few words.</p></body></html>",
+  }).findings.find((finding) => finding.ruleId === "SEO_THIN_CONTENT");
+  assert(thinFinding?.status === "REVIEW_REQUIRED" && thinFinding.evidence.includes("5 từ"), "Thin visible text is a review-required heuristic");
+
+  const notFoundAnalysis = analyzeWebsite({
+    targetUrl: "https://example.com/missing",
+    finalUrl: "https://example.com/missing",
+    httpStatus: 404,
+    statusText: "Not Found",
+    responseTimeMs: 300,
+    headers: {},
+    htmlBody: "<html><head><title>Error page</title></head><body><h1>Missing</h1></body></html>",
+  });
+  assert(notFoundAnalysis.findings.length === 1 && notFoundAnalysis.findings[0].ruleId === "HTTP_STATUS" && notFoundAnalysis.findings[0].status === "FAIL", "HTTP 404 reports only HTTP evidence and skips SEO rules");
+  const serverError = analyzeWebsite({
+    targetUrl: "https://example.com/server-error",
+    finalUrl: "https://example.com/server-error",
+    httpStatus: 500,
+    statusText: "Internal Server Error",
+    responseTimeMs: 300,
+    headers: {},
+    htmlBody: "<html><body><h1>error</h1></body></html>",
+  }).findings[0];
+  assert(serverError?.ruleId === "HTTP_STATUS" && serverError.status === "FAIL" && serverError.severity === "CRITICAL", "HTTP 5xx is a critical failure");
+  const unavailable = analyzeWebsite({
+    targetUrl: "https://example.com/unavailable",
+    finalUrl: "https://example.com/unavailable",
+    httpStatus: 503,
+    statusText: "Service Unavailable",
+    responseTimeMs: 300,
+    headers: {},
+    htmlBody: "<html><body>temporarily unavailable</body></html>",
+  }).findings[0];
+  assert(unavailable?.ruleId === "HTTP_STATUS" && unavailable.status === "REVIEW_REQUIRED", "HTTP 503 is treated as transient review-required");
 
   // Test 3.7: Insecure HTTP Protocol
   const insecureAnalysis = analyzeWebsite({

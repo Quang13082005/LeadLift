@@ -9,6 +9,23 @@ export interface SafeFetchOptions {
   totalTimeoutMs?: number;
   maxBodySizeBytes?: number;
   userAgent?: string;
+  /** Limit the initial URL and every redirect hop to this exact hostname. */
+  allowedHost?: string;
+  /** Permit XML content types for bounded sitemap retrieval only. */
+  allowXml?: boolean;
+  /** Abort in-flight DNS/socket work when the caller cancels. */
+  signal?: AbortSignal;
+}
+
+interface ResolvedSafeFetchOptions {
+  maxRedirects: number;
+  connectTimeoutMs: number;
+  totalTimeoutMs: number;
+  maxBodySizeBytes: number;
+  userAgent: string;
+  allowedHost: string | undefined;
+  allowXml: boolean;
+  signal: AbortSignal | undefined;
 }
 
 export interface SafeFetchResult {
@@ -43,6 +60,63 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
 const DEFAULT_TOTAL_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_BODY_SIZE_BYTES = 2 * 1024 * 1024; // 2MB
 const DEFAULT_USER_AGENT = "LeadLift-Scanner/1.0 (+https://leadlift.example; website audit preview)";
+const MAX_ACTIVE_SAFE_REQUESTS = 2;
+
+interface SafeRequestWaiter {
+  url: string;
+  signal: AbortSignal;
+  resolve: (release: () => void) => void;
+  reject: (error: Error) => void;
+  onAbort: () => void;
+}
+
+let activeSafeRequests = 0;
+const safeRequestWaiters: SafeRequestWaiter[] = [];
+
+function makeSafeRequestRelease(): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeSafeRequests = Math.max(0, activeSafeRequests - 1);
+    while (safeRequestWaiters.length > 0 && activeSafeRequests < MAX_ACTIVE_SAFE_REQUESTS) {
+      const waiter = safeRequestWaiters.shift()!;
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+      if (waiter.signal.aborted) {
+        waiter.reject(new ScannerFetchError("Quá trình quét đã bị hủy.", "SCAN_CANCELLED", waiter.url));
+        continue;
+      }
+      activeSafeRequests++;
+      waiter.resolve(makeSafeRequestRelease());
+    }
+  };
+}
+
+function acquireSafeRequestSlot(signal: AbortSignal, url: string): Promise<() => void> {
+  if (signal.aborted) return Promise.reject(new ScannerFetchError("Quá trình quét đã bị hủy.", "SCAN_CANCELLED", url));
+  if (activeSafeRequests < MAX_ACTIVE_SAFE_REQUESTS) {
+    activeSafeRequests++;
+    return Promise.resolve(makeSafeRequestRelease());
+  }
+
+  return new Promise((resolve, reject) => {
+    const waiter: SafeRequestWaiter = {
+      url,
+      signal,
+      resolve,
+      reject,
+      onAbort: () => {
+        const index = safeRequestWaiters.indexOf(waiter);
+        if (index >= 0) safeRequestWaiters.splice(index, 1);
+        signal.removeEventListener("abort", waiter.onAbort);
+        reject(new ScannerFetchError("Quá trình quét đã bị hủy.", "SCAN_CANCELLED", url));
+      },
+    };
+    safeRequestWaiters.push(waiter);
+    signal.addEventListener("abort", waiter.onAbort, { once: true });
+    if (signal.aborted) waiter.onAbort();
+  });
+}
 
 /**
  * Executes a single HTTP/HTTPS request step with SSRF protection,
@@ -50,7 +124,7 @@ const DEFAULT_USER_AGENT = "LeadLift-Scanner/1.0 (+https://leadlift.example; web
  */
 function performSingleRequest(
   targetUrl: string,
-  options: Required<SafeFetchOptions>
+  options: ResolvedSafeFetchOptions
 ): Promise<{
   statusCode: number;
   statusMessage: string;
@@ -67,6 +141,39 @@ function performSingleRequest(
     const agent = isHttps
       ? new https.Agent({ keepAlive: false, lookup, timeout: options.connectTimeoutMs })
       : new http.Agent({ keepAlive: false, lookup, timeout: options.connectTimeoutMs });
+
+    let settled = false;
+    let isAborted = false;
+    const requestRef: { current?: http.ClientRequest } = {};
+    const cleanup = () => {
+      options.signal?.removeEventListener("abort", onAbort);
+      agent.destroy();
+    };
+    const finishResolve = (value: {
+      statusCode: number;
+      statusMessage: string;
+      headers: Record<string, string>;
+      body: string;
+      location?: string;
+    }) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const finishReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      isAborted = true;
+      requestRef.current?.destroy();
+      const reason = options.signal?.reason;
+      finishReject(reason instanceof ScannerFetchError ? reason : new ScannerFetchError("Quá trình quét đã bị hủy.", "SCAN_CANCELLED", targetUrl));
+    };
 
     const requestOptions: http.RequestOptions = {
       protocol: parsed.protocol,
@@ -87,7 +194,6 @@ function performSingleRequest(
 
     let totalBytes = 0;
     const chunks: Buffer[] = [];
-    let isAborted = false;
 
     const req = client.request(requestOptions, (res) => {
       const statusCode = res.statusCode || 0;
@@ -109,18 +215,17 @@ function performSingleRequest(
       if ([301, 302, 303, 307, 308].includes(statusCode)) {
         const location = headers["location"];
         res.resume(); // discard body
-        return resolve({ statusCode, statusMessage, headers, body: "", location });
+        return finishResolve({ statusCode, statusMessage, headers, body: "", location });
       }
 
       // If not redirect, verify content type is acceptable (HTML or text)
-      if (
-        contentType &&
-        !["text/html", "application/xhtml+xml", "text/plain"].some((t) => contentType.includes(t))
-      ) {
+      const acceptedContentTypes = ["text/html", "application/xhtml+xml", "text/plain"];
+      const isXml = options.allowXml && (contentType === "application/xml" || contentType === "text/xml" || contentType.endsWith("+xml"));
+      if (contentType && !acceptedContentTypes.includes(contentType) && !isXml) {
         // Disallow binary file downloads (images, pdfs, audio, video, zip, etc.)
         isAborted = true;
         req.destroy();
-        return reject(
+        return finishReject(
           new ScannerFetchError(
             `Loại nội dung '${contentType}' không được hỗ trợ. Scanner chỉ phân tích trang web HTML/văn bản.`,
             "UNSUPPORTED_CONTENT_TYPE",
@@ -135,7 +240,7 @@ function performSingleRequest(
       if (reportedLength > options.maxBodySizeBytes) {
         isAborted = true;
         req.destroy();
-        return reject(
+        return finishReject(
           new ScannerFetchError(
             `Kích thước trang web (${reportedLength} bytes) vượt quá giới hạn tối đa cho phép (2MB).`,
             "BODY_SIZE_EXCEEDED",
@@ -151,7 +256,7 @@ function performSingleRequest(
         if (totalBytes > options.maxBodySizeBytes) {
           isAborted = true;
           req.destroy();
-          return reject(
+          return finishReject(
             new ScannerFetchError(
               "Nội dung phản hồi vượt quá giới hạn tối đa 2MB trong quá trình tải.",
               "BODY_SIZE_EXCEEDED",
@@ -167,12 +272,12 @@ function performSingleRequest(
         if (isAborted) return;
         const bodyBuffer = Buffer.concat(chunks);
         const body = bodyBuffer.toString("utf8");
-        resolve({ statusCode, statusMessage, headers, body });
+        finishResolve({ statusCode, statusMessage, headers, body });
       });
 
       res.on("error", (err) => {
         if (isAborted) return;
-        reject(
+        finishReject(
           new ScannerFetchError(
             `Lỗi khi đọc dữ liệu từ máy chủ: ${err.message}`,
             "SOCKET_READ_ERROR",
@@ -181,11 +286,12 @@ function performSingleRequest(
         );
       });
     });
+    requestRef.current = req;
 
     req.on("timeout", () => {
       isAborted = true;
       req.destroy();
-      reject(
+      finishReject(
         new ScannerFetchError(
           `Kết nối đến website quá thời gian chờ (hơn ${options.connectTimeoutMs}ms).`,
           "CONNECT_TIMEOUT",
@@ -198,9 +304,9 @@ function performSingleRequest(
       if (isAborted) return;
       // Handle SSRF rejection from custom lookup
       if (err.message.includes("SSRF Blocked")) {
-        return reject(new ScannerFetchError(err.message, "SSRF_DNS_BLOCKED", targetUrl));
+        return finishReject(new ScannerFetchError(err.message, "SSRF_DNS_BLOCKED", targetUrl));
       }
-      reject(
+      finishReject(
         new ScannerFetchError(
           `Không thể kết nối đến website: ${err.message}`,
           "CONNECTION_FAILED",
@@ -208,6 +314,12 @@ function performSingleRequest(
         )
       );
     });
+
+    if (options.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    options.signal?.addEventListener("abort", onAbort, { once: true });
 
     req.end();
   });
@@ -221,16 +333,24 @@ export async function safeFetchWebsite(
   initialUrl: string,
   userOptions: SafeFetchOptions = {}
 ): Promise<SafeFetchResult> {
-  const options: Required<SafeFetchOptions> = {
+  if (userOptions.signal?.aborted) {
+    throw new ScannerFetchError("Quá trình quét đã bị hủy.", "SCAN_CANCELLED", initialUrl);
+  }
+
+  const operationController = new AbortController();
+  const options: ResolvedSafeFetchOptions = {
     maxRedirects: userOptions.maxRedirects ?? DEFAULT_MAX_REDIRECTS,
     connectTimeoutMs: userOptions.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
     totalTimeoutMs: userOptions.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS,
     maxBodySizeBytes: userOptions.maxBodySizeBytes ?? DEFAULT_MAX_BODY_SIZE_BYTES,
     userAgent: userOptions.userAgent ?? DEFAULT_USER_AGENT,
+    allowedHost: userOptions.allowedHost,
+    allowXml: userOptions.allowXml ?? false,
+    signal: operationController.signal,
   };
 
   // Step 1: Initial URL validation
-  const val = validateTargetUrl(initialUrl);
+  const val = validateTargetUrl(initialUrl, options.allowedHost ? { allowedHost: options.allowedHost } : {});
   if (!val.valid || !val.normalizedUrl) {
     throw new ScannerFetchError(val.reason || "URL không hợp lệ.", val.code || "INVALID_URL", initialUrl);
   }
@@ -241,16 +361,26 @@ export async function safeFetchWebsite(
 
   const startTime = Date.now();
 
-  // Enforce overall operation timeout
+  let rejectAbort: (reason: ScannerFetchError) => void = () => {};
+  const abortPromise = new Promise<never>((_, reject) => { rejectAbort = reject; });
+  const onExternalAbort = () => {
+    const abortError = new ScannerFetchError("Quá trình quét đã bị hủy.", "SCAN_CANCELLED", initialUrl);
+    operationController.abort(abortError);
+    rejectAbort(abortError);
+  };
+  userOptions.signal?.addEventListener("abort", onExternalAbort, { once: true });
+  if (userOptions.signal?.aborted) onExternalAbort();
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => {
-      reject(
-        new ScannerFetchError(
-          `Toàn bộ tác vụ quét quá thời gian chờ tối đa (${options.totalTimeoutMs}ms).`,
-          "TOTAL_TIMEOUT",
-          initialUrl
-        )
+    timeoutHandle = setTimeout(() => {
+      const timeoutError = new ScannerFetchError(
+        `Toàn bộ tác vụ quét quá thời gian chờ tối đa (${options.totalTimeoutMs}ms).`,
+        "TOTAL_TIMEOUT",
+        initialUrl
       );
+      operationController.abort(timeoutError);
+      reject(timeoutError);
     }, options.totalTimeoutMs);
   });
 
@@ -258,7 +388,17 @@ export async function safeFetchWebsite(
     let redirectCount = 0;
 
     while (redirectCount <= options.maxRedirects) {
-      const response = await performSingleRequest(currentUrl, options);
+      if (options.signal?.aborted) {
+        const reason = options.signal.reason;
+        throw reason instanceof ScannerFetchError ? reason : new ScannerFetchError("Quá trình quét đã bị hủy.", "SCAN_CANCELLED", currentUrl);
+      }
+      const release = await acquireSafeRequestSlot(options.signal || new AbortController().signal, currentUrl);
+      let response: Awaited<ReturnType<typeof performSingleRequest>>;
+      try {
+        response = await performSingleRequest(currentUrl, options);
+      } finally {
+        release();
+      }
 
       // Check if this response is a redirect
       if (response.location && [301, 302, 303, 307, 308].includes(response.statusCode)) {
@@ -286,7 +426,7 @@ export async function safeFetchWebsite(
         }
 
         // Crucial SSRF check on every redirect hop!
-        const nextVal = validateTargetUrl(nextUrl);
+        const nextVal = validateTargetUrl(nextUrl, options.allowedHost ? { allowedHost: options.allowedHost } : {});
         if (!nextVal.valid || !nextVal.normalizedUrl) {
           throw new ScannerFetchError(
             `Chuyển hướng đến địa chỉ bị từ chối bảo mật: ${nextVal.reason}`,
@@ -344,5 +484,10 @@ export async function safeFetchWebsite(
     );
   })();
 
-  return Promise.race([fetchPromise, timeoutPromise]);
+  try {
+    return await Promise.race([fetchPromise, abortPromise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    userOptions.signal?.removeEventListener("abort", onExternalAbort);
+  }
 }

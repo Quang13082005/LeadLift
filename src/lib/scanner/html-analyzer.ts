@@ -4,6 +4,35 @@ import type {
   ScanSummary,
 } from "@/types/scanner";
 
+export const SEO_THRESHOLDS = {
+  titleMinChars: 10,
+  titleMaxChars: 70,
+  metaDescriptionMinChars: 50,
+  metaDescriptionMaxChars: 160,
+  thinContentWordCount: 200,
+} as const;
+
+const DEFAULT_RECOMMENDATIONS: Record<string, string> = {
+  HTTP_STATUS: "Kiểm tra phản hồi của URL và xác nhận trạng thái với nội dung mong muốn.",
+  SECURITY_HTTPS: "Dùng HTTPS cho website công khai và chuyển hướng HTTP sang HTTPS khi phù hợp.",
+  SEO_TITLE_EXISTS: "Rà soát tiêu đề để phản ánh chính xác nội dung và mục đích của trang.",
+  SEO_TITLE_LENGTH: "Đánh giá tiêu đề theo hướng dẫn độ dài của LeadLift và cách hiển thị thực tế trên kết quả tìm kiếm.",
+  SEO_TITLE_DUPLICATE: "Đối chiếu các trang trong nhóm rồi cân nhắc tiêu đề riêng nếu nội dung và mục tiêu tìm kiếm khác nhau.",
+  SEO_META_DESCRIPTION: "Rà soát xem trang có cần mô tả tìm kiếm riêng theo mục tiêu hiển thị hay không.",
+  SEO_META_DESCRIPTION_LENGTH: "Đánh giá mô tả theo hướng dẫn độ dài của LeadLift và nội dung thực tế của trang.",
+  SEO_META_DESCRIPTION_DUPLICATE: "Đối chiếu nội dung các trang và cân nhắc mô tả riêng nếu mục tiêu của chúng khác nhau.",
+  SEO_CANONICAL: "Kiểm tra URL canonical và xác nhận nó trỏ tới URL chuẩn dự kiến.",
+  SEO_CANONICAL_MISMATCH: "Xác nhận canonical khác URL hiện tại là chủ đích, đặc biệt khi nội dung hai trang khác nhau.",
+  SEO_ROBOTS_NOINDEX: "Xác nhận noindex là chủ đích đối với trang này trước khi thay đổi chỉ thị.",
+  SEO_H1_COUNT: "Rà soát tiêu đề chính và cấu trúc nội dung của trang.",
+  SEO_HEADING_HIERARCHY: "Rà soát thứ tự heading để cấu trúc nội dung dễ theo dõi; không tự động đổi heading nếu cấu trúc có chủ ý.",
+  SEO_THIN_CONTENT: "Đối chiếu nội dung với mục đích trang; độ dài đơn lẻ không xác định chất lượng nội dung.",
+  SEO_BROKEN_INTERNAL_LINK: "Kiểm tra đường dẫn đích, khôi phục trang hoặc cập nhật liên kết tới nội dung phù hợp.",
+  MOBILE_VIEWPORT: "Rà soát cấu hình viewport và kiểm tra trang trên thiết bị di động.",
+  SOCIAL_OG_TAGS: "Rà soát thẻ chia sẻ nếu trang cần hiển thị bản xem trước trên mạng xã hội.",
+  TECHNICAL_HEALTH: "Đo lại thời gian phản hồi trong điều kiện ổn định trước khi thay đổi hạ tầng.",
+};
+
 /**
  * Decodes common HTML entities into plain text.
  */
@@ -49,6 +78,9 @@ function getAttribute(tagHtml: string, attrName: string): string | null {
 export function parseHtmlContent(html: string): ParsedHtmlData {
   const pageData: ParsedHtmlData = {
     h1List: [],
+    headingLevels: [],
+    bodyWordCount: 0,
+    canonicalTagPresent: false,
   };
 
   if (!html || typeof html !== "string") {
@@ -75,8 +107,8 @@ export function parseHtmlContent(html: string): ParsedHtmlData {
       pageData.metaDescription = content.trim();
     } else if (name === "viewport" && !pageData.viewport) {
       pageData.viewport = content.trim();
-    } else if (name === "robots" && !pageData.robotsMeta) {
-      pageData.robotsMeta = content.trim();
+    } else if ((name === "robots" || /bot$/i.test(name)) && content) {
+      pageData.robotsMeta = [pageData.robotsMeta, content.trim()].filter(Boolean).join("; ");
     } else if (property === "og:title" && !pageData.ogTitle) {
       pageData.ogTitle = content.trim();
     } else if (property === "og:description" && !pageData.ogDescription) {
@@ -95,6 +127,7 @@ export function parseHtmlContent(html: string): ParsedHtmlData {
     const tag = linkMatch[0];
     const rel = (getAttribute(tag, "rel") || "").toLowerCase();
     if (rel.split(/\s+/).includes("canonical")) {
+      pageData.canonicalTagPresent = true;
       const href = getAttribute(tag, "href");
       if (href && !pageData.canonical) {
         pageData.canonical = href.trim();
@@ -111,6 +144,18 @@ export function parseHtmlContent(html: string): ParsedHtmlData {
       pageData.h1List.push(text);
     }
   }
+
+  const headingRegex = /<h([1-6])\b[^>]*>/gi;
+  let headingMatch: RegExpExecArray | null;
+  while ((headingMatch = headingRegex.exec(html)) !== null) pageData.headingLevels.push(Number(headingMatch[1]));
+
+  const bodyMatch = html.match(/<body\b[^>]*>([\s\S]*?)<\/body\s*>/i);
+  const bodyHtml = bodyMatch?.[1] ?? html.replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/i, " ");
+  const readableHtml = bodyHtml
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(script|style|noscript|svg|header|nav|footer|aside|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ");
+  const visibleText = stripTags(readableHtml);
+  pageData.bodyWordCount = visibleText.match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu)?.length || 0;
 
   return pageData;
 }
@@ -132,6 +177,7 @@ export interface AnalysisInput {
 export function analyzeWebsite({
   finalUrl,
   httpStatus,
+  statusText,
   responseTimeMs,
   headers,
   htmlBody,
@@ -143,73 +189,60 @@ export function analyzeWebsite({
   const timestamp = new Date().toISOString();
   const pageData = parseHtmlContent(htmlBody);
   const findings: ScanFinding[] = [];
+  const finish = () => {
+    const completedFindings = findings.map((finding) => ({
+      ...finding,
+      recommendation: finding.recommendation || DEFAULT_RECOMMENDATIONS[finding.ruleId] || "Rà soát bằng chứng và xác nhận thay đổi phù hợp với mục tiêu của trang.",
+    }));
+    const count = (status: ScanFinding["status"]) => completedFindings.filter((finding) => finding.status === status).length;
+    const summary: ScanSummary = {
+      totalRules: completedFindings.length,
+      passCount: count("PASS"),
+      failCount: count("FAIL"),
+      unknownCount: count("UNKNOWN"),
+      reviewRequiredCount: count("REVIEW_REQUIRED"),
+      criticalCount: completedFindings.filter((finding) => finding.severity === "CRITICAL" && finding.status === "FAIL").length,
+      highCount: completedFindings.filter((finding) => finding.severity === "HIGH" && finding.status === "FAIL").length,
+      mediumCount: completedFindings.filter((finding) => finding.severity === "MEDIUM" && finding.status === "FAIL").length,
+      lowCount: completedFindings.filter((finding) => finding.severity === "LOW" && finding.status === "FAIL").length,
+      infoCount: completedFindings.filter((finding) => finding.severity === "INFO").length,
+    };
+    return { findings: completedFindings, summary, pageData };
+  };
 
-  // Check 1: HTTP Response Status
-  if (httpStatus === 200) {
+  // Error documents are not evidence for page-level SEO rules.
+  if (httpStatus < 200 || httpStatus >= 300) {
+    const transient = httpStatus === 429 || httpStatus === 503;
+    const status: ScanFinding["status"] = transient || httpStatus < 400 ? "REVIEW_REQUIRED" : "FAIL";
     findings.push({
       ruleId: "HTTP_STATUS",
       ruleName: "Mã trạng thái phản hồi HTTP",
       category: "TECHNICAL",
-      severity: "INFO",
-      status: "PASS",
-      description: "Máy chủ phản hồi mã trạng thái 200 OK thành công.",
-      evidence: `Mã HTTP ${httpStatus} OK. Trang web phản hồi bình thường và sẵn sàng phục vụ người dùng.`,
+      severity: transient ? "HIGH" : httpStatus >= 500 ? "CRITICAL" : [401, 403, 404].includes(httpStatus) ? "HIGH" : "MEDIUM",
+      status,
+      description: transient
+        ? `Máy chủ phản hồi HTTP ${httpStatus}; đây có thể là giới hạn tốc độ hoặc lỗi tạm thời.`
+        : httpStatus >= 400 ? `Máy chủ trả về lỗi HTTP ${httpStatus}.` : `Không nhận được phản hồi trang cuối ở dải HTTP 2xx (HTTP ${httpStatus}).`,
+      evidence: `HTTP ${httpStatus}${statusText ? ` ${statusText}` : ""} tại ${finalUrl}.`,
       sourceUrl: finalUrl,
       timestamp,
+      recommendation: transient
+        ? "Xác nhận trạng thái trên trình duyệt thông thường hoặc thử lại sau; không kết luận lỗi nội dung từ phản hồi giới hạn/tạm thời này."
+        : "Kiểm tra URL và trạng thái HTTP từ trình duyệt; khôi phục tài nguyên hoặc cập nhật liên kết nếu lỗi được xác nhận.",
     });
-  } else if (httpStatus === 404) {
-    findings.push({
-      ruleId: "HTTP_STATUS",
-      ruleName: "Mã trạng thái phản hồi HTTP",
-      category: "TECHNICAL",
-      severity: "CRITICAL",
-      status: "FAIL",
-      description: "Trang web không tồn tại (HTTP 404 Not Found).",
-      evidence: `Mã phản hồi HTTP ${httpStatus} Not Found. Đường dẫn URL không tìm thấy tài nguyên.`,
-      sourceUrl: finalUrl,
-      timestamp,
-      recommendation: "Kiểm tra lại tính chính xác của đường dẫn URL hoặc cấu hình chuyển hướng 301 về trang chủ nếu URL đã thay đổi.",
-    });
-  } else if (httpStatus === 403) {
-    findings.push({
-      ruleId: "HTTP_STATUS",
-      ruleName: "Mã trạng thái phản hồi HTTP",
-      category: "TECHNICAL",
-      severity: "HIGH",
-      status: "FAIL",
-      description: "Máy chủ chặn quyền truy cập (HTTP 403 Forbidden).",
-      evidence: `Mã phản hồi HTTP ${httpStatus} Forbidden. Máy chủ từ chối phục vụ yêu cầu từ bot hoặc người dùng.`,
-      sourceUrl: finalUrl,
-      timestamp,
-      recommendation: "Kiểm tra cấu hình tường lửa (WAF), quyền thư mục trên máy chủ hoặc các quy tắc chặn bot hợp lệ.",
-    });
-  } else if (httpStatus >= 500) {
-    findings.push({
-      ruleId: "HTTP_STATUS",
-      ruleName: "Mã trạng thái phản hồi HTTP",
-      category: "TECHNICAL",
-      severity: "CRITICAL",
-      status: "FAIL",
-      description: "Lỗi máy chủ nội bộ (HTTP 5xx Server Error).",
-      evidence: `Mã phản hồi HTTP ${httpStatus}. Hệ thống máy chủ của website đang gặp sự cố nội bộ.`,
-      sourceUrl: finalUrl,
-      timestamp,
-      recommendation: "Kiểm tra nhật ký lỗi máy chủ (error logs), dịch vụ ứng dụng hoặc cơ sở dữ liệu của website.",
-    });
-  } else {
-    findings.push({
-      ruleId: "HTTP_STATUS",
-      ruleName: "Mã trạng thái phản hồi HTTP",
-      category: "TECHNICAL",
-      severity: "MEDIUM",
-      status: "FAIL",
-      description: `Máy chủ phản hồi mã trạng thái HTTP ${httpStatus}.`,
-      evidence: `Mã HTTP ${httpStatus}. Phản hồi không phải là 200 OK thông thường.`,
-      sourceUrl: finalUrl,
-      timestamp,
-      recommendation: "Xem lại cấu hình định tuyến và mã trạng thái phản hồi của trang web.",
-    });
+    return finish();
   }
+  findings.push({
+    ruleId: "HTTP_STATUS",
+    ruleName: "Mã trạng thái phản hồi HTTP",
+    category: "TECHNICAL",
+    severity: "INFO",
+    status: "PASS",
+    description: "Máy chủ trả về phản hồi thành công trong dải HTTP 2xx.",
+    evidence: `HTTP ${httpStatus}${statusText ? ` ${statusText}` : ""} tại ${finalUrl}.`,
+    sourceUrl: finalUrl,
+    timestamp,
+  });
 
   // Check 2: Protocol & HTTPS Security
   const isHttps = finalUrl.toLowerCase().startsWith("https://");
@@ -240,7 +273,7 @@ export function analyzeWebsite({
     });
   }
 
-  // Check 3: HTML Title & Title Length
+  // Title presence is direct evidence; length follows a review-only internal guideline.
   if (!pageData.title) {
     findings.push({
       ruleId: "SEO_TITLE_EXISTS",
@@ -252,139 +285,146 @@ export function analyzeWebsite({
       evidence: "Không tìm thấy thẻ <title> trong mã nguồn HTML của trang.",
       sourceUrl: finalUrl,
       timestamp,
-      recommendation: "Thêm thẻ <title> trong phần <head> chứa tên doanh nghiệp và dịch vụ chính (độ dài khuyến nghị 10 - 70 ký tự).",
+      recommendation: "Thêm tiêu đề mô tả chính xác nội dung trang vào phần head.",
     });
   } else {
     const titleLen = pageData.title.length;
-    if (titleLen < 10) {
-      findings.push({
-        ruleId: "SEO_TITLE_LENGTH",
-        ruleName: "Độ dài tiêu đề trang (HTML Title)",
-        category: "SEO",
-        severity: "MEDIUM",
-        status: "FAIL",
-        description: "Tiêu đề trang quá ngắn, chưa đủ thông tin định danh.",
-        evidence: `Nội dung: "${pageData.title}" (${titleLen} ký tự). Độ dài khuyến nghị từ 10 đến 70 ký tự.`,
-        sourceUrl: finalUrl,
-        timestamp,
-        recommendation: "Mở rộng tiêu đề bằng cách bổ sung tên dịch vụ, địa điểm hoặc giá trị nổi bật của doanh nghiệp.",
-      });
-    } else if (titleLen > 70) {
-      findings.push({
-        ruleId: "SEO_TITLE_LENGTH",
-        ruleName: "Độ dài tiêu đề trang (HTML Title)",
-        category: "SEO",
-        severity: "LOW",
-        status: "FAIL",
-        description: "Tiêu đề trang vượt quá 70 ký tự, có thể bị cắt ngắn trên kết quả tìm kiếm Google.",
-        evidence: `Nội dung: "${pageData.title}" (${titleLen} ký tự). Google thường chỉ hiển thị khoảng 60 - 70 ký tự đầu tiên.`,
-        sourceUrl: finalUrl,
-        timestamp,
-        recommendation: "Rút gọn tiêu đề về dưới 70 ký tự, đưa các từ khóa quan trọng và thương hiệu lên đầu.",
-      });
-    } else {
-      findings.push({
-        ruleId: "SEO_TITLE_EXISTS",
-        ruleName: "Thẻ tiêu đề trang (HTML Title)",
-        category: "SEO",
-        severity: "INFO",
-        status: "PASS",
-        description: "Thẻ <title> tồn tại và có độ dài hợp chuẩn.",
-        evidence: `Tiêu đề: "${pageData.title}" (${titleLen} ký tự, nằm trong khoảng tối ưu 10 - 70 ký tự).`,
-        sourceUrl: finalUrl,
-        timestamp,
-      });
-    }
+    const withinGuideline = titleLen >= SEO_THRESHOLDS.titleMinChars && titleLen <= SEO_THRESHOLDS.titleMaxChars;
+    findings.push({
+      ruleId: "SEO_TITLE_EXISTS",
+      ruleName: "Thẻ tiêu đề trang (HTML Title)",
+      category: "SEO",
+      severity: "INFO",
+      status: "PASS",
+      description: "Tìm thấy nội dung thẻ <title>.",
+      evidence: `Tiêu đề: "${pageData.title}" (${titleLen} ký tự).`,
+      sourceUrl: finalUrl,
+      timestamp,
+    });
+    findings.push({
+      ruleId: "SEO_TITLE_LENGTH",
+      ruleName: "Độ dài tiêu đề trang (HTML Title)",
+      category: "SEO",
+      severity: withinGuideline ? "INFO" : "MEDIUM",
+      status: withinGuideline ? "PASS" : "REVIEW_REQUIRED",
+      description: withinGuideline
+        ? `Độ dài nằm trong hướng dẫn nội bộ ${SEO_THRESHOLDS.titleMinChars}–${SEO_THRESHOLDS.titleMaxChars} ký tự.`
+        : `Độ dài nằm ngoài hướng dẫn nội bộ ${SEO_THRESHOLDS.titleMinChars}–${SEO_THRESHOLDS.titleMaxChars} ký tự; đây không phải ngưỡng xếp hạng của công cụ tìm kiếm.`,
+      evidence: `Tiêu đề có ${titleLen} ký tự; hướng dẫn nội bộ là ${SEO_THRESHOLDS.titleMinChars}–${SEO_THRESHOLDS.titleMaxChars}.`,
+      sourceUrl: finalUrl,
+      timestamp,
+    });
   }
 
-  // Check 4: Meta Description
+  // Description presence and length are reported separately; neither proves a ranking outcome.
   if (!pageData.metaDescription) {
     findings.push({
       ruleId: "SEO_META_DESCRIPTION",
       ruleName: "Thẻ mô tả tóm tắt (Meta Description)",
       category: "SEO",
-      severity: "HIGH",
-      status: "FAIL",
+      severity: "MEDIUM",
+      status: "REVIEW_REQUIRED",
       description: "Trang web thiếu thẻ <meta name=\"description\">.",
       evidence: "Không tìm thấy thẻ <meta name=\"description\"> trong mã nguồn HTML.",
       sourceUrl: finalUrl,
       timestamp,
-      recommendation: "Bổ sung thẻ meta description dài khoảng 50 - 160 ký tự, tóm tắt nội dung hấp dẫn và có lời kêu gọi hành động để tăng tỷ lệ nhấp (CTR).",
+      recommendation: "Xác nhận trang có cần mô tả riêng cho kết quả tìm kiếm; nếu có, viết mô tả trung thực với nội dung trang.",
     });
   } else {
     const descLen = pageData.metaDescription.length;
-    if (descLen < 50) {
+    findings.push({
+      ruleId: "SEO_META_DESCRIPTION",
+      ruleName: "Thẻ mô tả tóm tắt (Meta Description)",
+      category: "SEO",
+      severity: "INFO",
+      status: "PASS",
+      description: "Tìm thấy nội dung meta description.",
+      evidence: `Mô tả: "${pageData.metaDescription}" (${descLen} ký tự).`,
+      sourceUrl: finalUrl,
+      timestamp,
+    });
+    const withinGuideline = descLen >= SEO_THRESHOLDS.metaDescriptionMinChars && descLen <= SEO_THRESHOLDS.metaDescriptionMaxChars;
+    findings.push({
+      ruleId: "SEO_META_DESCRIPTION_LENGTH",
+      ruleName: "Độ dài meta description",
+      category: "SEO",
+      severity: withinGuideline ? "INFO" : "LOW",
+      status: withinGuideline ? "PASS" : "REVIEW_REQUIRED",
+      description: withinGuideline
+        ? `Độ dài nằm trong hướng dẫn nội bộ ${SEO_THRESHOLDS.metaDescriptionMinChars}–${SEO_THRESHOLDS.metaDescriptionMaxChars} ký tự.`
+        : `Độ dài nằm ngoài hướng dẫn nội bộ ${SEO_THRESHOLDS.metaDescriptionMinChars}–${SEO_THRESHOLDS.metaDescriptionMaxChars} ký tự; nội dung hiển thị có thể được viết lại.`,
+      evidence: `Meta description có ${descLen} ký tự; hướng dẫn nội bộ là ${SEO_THRESHOLDS.metaDescriptionMinChars}–${SEO_THRESHOLDS.metaDescriptionMaxChars}.`,
+      sourceUrl: finalUrl,
+      timestamp,
+    });
+  }
+
+  // Canonical is optional; validate syntax and target only when declared.
+  if (!pageData.canonicalTagPresent) {
+    findings.push({
+      ruleId: "SEO_CANONICAL",
+      ruleName: "Thẻ định danh trang chuẩn (Canonical Tag)",
+      category: "SEO",
+      severity: "LOW",
+      status: "UNKNOWN",
+      description: "Không khai báo canonical; sự vắng mặt đơn lẻ không xác định tác động tìm kiếm.",
+      evidence: "Không tìm thấy thẻ rel=canonical trong HTML.",
+      sourceUrl: finalUrl,
+      timestamp,
+      recommendation: "Canonical là tùy chọn; chỉ thêm hoặc thay đổi nó khi cần nêu URL chuẩn cho trang này.",
+    });
+  } else if (!pageData.canonical) {
+    findings.push({
+      ruleId: "SEO_CANONICAL",
+      ruleName: "Thẻ định danh trang chuẩn (Canonical Tag)",
+      category: "SEO",
+      severity: "HIGH",
+      status: "FAIL",
+      description: "Thẻ canonical được khai báo nhưng thiếu href có thể dùng.",
+      evidence: "Tìm thấy rel=canonical nhưng href rỗng hoặc bị thiếu.",
+      sourceUrl: finalUrl,
+      timestamp,
+      recommendation: "Kiểm tra markup canonical và khai báo href HTTP(S) hợp lệ.",
+    });
+  } else {
+    try {
+      const canonicalUrl = new URL(pageData.canonical, finalUrl);
+      if (canonicalUrl.protocol !== "http:" && canonicalUrl.protocol !== "https:") throw new Error("unsupported protocol");
+      canonicalUrl.hash = "";
+      const currentUrl = new URL(finalUrl);
+      currentUrl.hash = "";
+      const isMatch = canonicalUrl.href === currentUrl.href;
       findings.push({
-        ruleId: "SEO_META_DESCRIPTION",
-        ruleName: "Thẻ mô tả tóm tắt (Meta Description)",
+        ruleId: isMatch ? "SEO_CANONICAL" : "SEO_CANONICAL_MISMATCH",
+        ruleName: isMatch ? "Thẻ định danh trang chuẩn (Canonical Tag)" : "Canonical trỏ tới URL khác",
         category: "SEO",
-        severity: "LOW",
-        status: "FAIL",
-        description: "Thẻ meta description quá ngắn, chưa đủ thông tin thuyết phục người dùng.",
-        evidence: `Nội dung: "${pageData.metaDescription}" (${descLen} ký tự). Khuyến nghị độ dài tối ưu từ 50 đến 160 ký tự.`,
+        severity: isMatch ? "INFO" : "MEDIUM",
+        status: isMatch ? "PASS" : "REVIEW_REQUIRED",
+        description: isMatch
+          ? "Canonical trỏ tới URL trang hiện tại."
+          : "Canonical trỏ tới URL khác; cần xác nhận đây là lựa chọn có chủ đích.",
+        evidence: `Canonical "${pageData.canonical}" phân giải thành "${canonicalUrl.href}"; URL được tải là "${currentUrl.href}".`,
         sourceUrl: finalUrl,
         timestamp,
-        recommendation: "Viết thêm 1 - 2 câu súc tích mô tả lợi ích và dịch vụ cung cấp để đạt độ dài chuẩn 50 - 160 ký tự.",
       });
-    } else if (descLen > 160) {
+    } catch {
       findings.push({
-        ruleId: "SEO_META_DESCRIPTION",
-        ruleName: "Thẻ mô tả tóm tắt (Meta Description)",
+        ruleId: "SEO_CANONICAL",
+        ruleName: "Thẻ định danh trang chuẩn (Canonical Tag)",
         category: "SEO",
-        severity: "LOW",
+        severity: "HIGH",
         status: "FAIL",
-        description: "Thẻ meta description dài hơn 160 ký tự, sẽ bị cắt bớt bằng dấu '...' trên kết quả tìm kiếm.",
-        evidence: `Nội dung: "${pageData.metaDescription.slice(0, 100)}..." (${descLen} ký tự).`,
-        sourceUrl: finalUrl,
-        timestamp,
-        recommendation: "Rút gọn mô tả xuống khoảng 120 - 155 ký tự để hiển thị trọn vẹn trên cả màn hình máy tính và thiết bị di động.",
-      });
-    } else {
-      findings.push({
-        ruleId: "SEO_META_DESCRIPTION",
-        ruleName: "Thẻ mô tả tóm tắt (Meta Description)",
-        category: "SEO",
-        severity: "INFO",
-        status: "PASS",
-        description: "Thẻ meta description tồn tại với độ dài chuẩn SEO.",
-        evidence: `Mô tả: "${pageData.metaDescription.slice(0, 90)}..." (${descLen} ký tự, nằm trong dải tối ưu 50 - 160 ký tự).`,
+        description: "Href canonical không thể phân giải thành URL HTTP(S) hợp lệ.",
+        evidence: `Canonical khai báo "${pageData.canonical}" trên URL "${finalUrl}".`,
         sourceUrl: finalUrl,
         timestamp,
       });
     }
   }
 
-  // Check 5: Canonical Tag
-  if (pageData.canonical) {
-    findings.push({
-      ruleId: "SEO_CANONICAL",
-      ruleName: "Thẻ định danh trang chuẩn (Canonical Tag)",
-      category: "SEO",
-      severity: "INFO",
-      status: "PASS",
-      description: "Thẻ canonical tồn tại, giúp ngăn ngừa vấn đề trùng lặp nội dung.",
-      evidence: `Thẻ canonical: "${pageData.canonical}". Công cụ tìm kiếm biết rõ trang gốc cần lập chỉ mục.`,
-      sourceUrl: finalUrl,
-      timestamp,
-    });
-  } else {
-    findings.push({
-      ruleId: "SEO_CANONICAL",
-      ruleName: "Thẻ định danh trang chuẩn (Canonical Tag)",
-      category: "SEO",
-      severity: "MEDIUM",
-      status: "FAIL",
-      description: "Thiếu thẻ <link rel=\"canonical\"> định danh URL chuẩn.",
-      evidence: "Không tìm thấy thẻ <link rel=\"canonical\"> trong mã nguồn HTML.",
-      sourceUrl: finalUrl,
-      timestamp,
-      recommendation: `Khai báo thẻ <link rel="canonical" href="${finalUrl}"> để thống nhất thứ hạng URL và tránh chia sẻ sức mạnh SEO khi có tham số truy vấn.`,
-    });
-  }
-
   // Check 6: Robots Meta & Noindex Detection
   const rawRobotsMeta = pageData.robotsMeta || "";
-  const rawXRobotsTag = headers["x-robots-tag"] || "";
+  const rawXRobotsTag = Object.entries(headers).find(([name]) => name.toLowerCase() === "x-robots-tag")?.[1] || "";
   const combinedRobots = `${rawRobotsMeta} ${rawXRobotsTag}`.toLowerCase();
   const hasNoindex = /\b(noindex|none)\b/i.test(combinedRobots);
 
@@ -393,13 +433,13 @@ export function analyzeWebsite({
       ruleId: "SEO_ROBOTS_NOINDEX",
       ruleName: "Chỉ thị chặn lập chỉ mục tìm kiếm (Robots Noindex)",
       category: "SEO",
-      severity: "CRITICAL",
-      status: "FAIL",
-      description: "Phát hiện chỉ thị 'noindex', trang web bị chặn hoàn toàn khỏi kết quả tìm kiếm Google.",
+      severity: "HIGH",
+      status: "REVIEW_REQUIRED",
+      description: "Phát hiện chỉ thị noindex; cần xác nhận trang này có nên được lập chỉ mục hay không.",
       evidence: `Chỉ thị phát hiện: meta robots = "${rawRobotsMeta || "—"}", X-Robots-Tag = "${rawXRobotsTag || "—"}".`,
       sourceUrl: finalUrl,
       timestamp,
-      recommendation: "Nếu đây là trang công khai cần tiếp cận khách hàng tiềm năng, hãy gỡ bỏ ngay lập tức giá trị 'noindex' khỏi thẻ meta robots hoặc header HTTP.",
+      recommendation: "Xác nhận noindex là chủ đích trước khi giữ hoặc gỡ chỉ thị này.",
     });
   } else {
     findings.push({
@@ -408,27 +448,27 @@ export function analyzeWebsite({
       category: "SEO",
       severity: "INFO",
       status: "PASS",
-      description: "Trang web không bị chặn bởi chỉ thị noindex.",
-      evidence: "Không phát hiện chỉ thị noindex hay none trong meta robots hoặc header HTTP. Trang cho phép công cụ tìm kiếm thu thập dữ liệu.",
+      description: "Không phát hiện chỉ thị noindex trong các nguồn robots được kiểm tra.",
+      evidence: `meta robots="${rawRobotsMeta || "(không có)"}", X-Robots-Tag="${rawXRobotsTag || "(không có)"}".`,
       sourceUrl: finalUrl,
       timestamp,
     });
   }
 
-  // Check 7: Heading H1 Count
+  // H1 count and heading sequence are heuristics; unusual structures require review.
   const h1Count = pageData.h1List.length;
   if (h1Count === 0) {
     findings.push({
       ruleId: "SEO_H1_COUNT",
       ruleName: "Số lượng thẻ tiêu đề cấp 1 (H1 Count)",
       category: "SEO",
-      severity: "HIGH",
-      status: "FAIL",
+      severity: "MEDIUM",
+      status: "REVIEW_REQUIRED",
       description: "Trang web không có thẻ <h1> nào.",
       evidence: "Tìm thấy 0 thẻ <h1> trong tài liệu HTML. Cấu trúc trang thiếu tiêu đề chính.",
       sourceUrl: finalUrl,
       timestamp,
-      recommendation: "Bổ sung đúng 1 thẻ <h1> duy nhất thể hiện thông điệp và chủ đề trọng tâm của trang.",
+      recommendation: "Rà soát xem trang có cần một heading chính rõ ràng hay không.",
     });
   } else if (h1Count === 1) {
     findings.push({
@@ -448,14 +488,55 @@ export function analyzeWebsite({
       ruleName: "Số lượng thẻ tiêu đề cấp 1 (H1 Count)",
       category: "SEO",
       severity: "MEDIUM",
-      status: "FAIL",
+      status: "REVIEW_REQUIRED",
       description: `Trang web sử dụng ${h1Count} thẻ <h1>, làm loãng cấu trúc phân cấp nội dung.`,
       evidence: `Tìm thấy ${h1Count} thẻ <h1>: ${pageData.h1List.map((h, i) => `[${i + 1}] "${h}"`).slice(0, 3).join(", ")}${h1Count > 3 ? "..." : ""}.`,
       sourceUrl: finalUrl,
       timestamp,
-      recommendation: "Chỉ giữ lại 1 thẻ <h1> duy nhất cho tiêu đề trang, các tiêu đề mục phụ nên chuyển sang dùng <h2> và <h3>.",
+      recommendation: "Rà soát cấu trúc H1 theo nội dung trang; nhiều H1 không tự nó chứng minh lỗi tìm kiếm.",
     });
   }
+
+  const skippedHeadingTransitions: string[] = [];
+  for (let index = 0; index < pageData.headingLevels.length; index += 1) {
+    const current = pageData.headingLevels[index];
+    const previous = pageData.headingLevels[index - 1];
+    if ((index === 0 && current > 1) || (previous !== undefined && current > previous + 1)) {
+      skippedHeadingTransitions.push(index === 0 ? `H${current} xuất hiện trước H1` : `H${previous}→H${current}`);
+    }
+  }
+  findings.push({
+    ruleId: "SEO_HEADING_HIERARCHY",
+    ruleName: "Thứ tự cấp heading",
+    category: "SEO",
+    severity: skippedHeadingTransitions.length ? "LOW" : "INFO",
+    status: pageData.headingLevels.length === 0 ? "UNKNOWN" : skippedHeadingTransitions.length ? "REVIEW_REQUIRED" : "PASS",
+    description: pageData.headingLevels.length === 0
+      ? "Không tìm thấy heading để đánh giá thứ tự cấp."
+      : skippedHeadingTransitions.length
+        ? "Có bước nhảy cấp heading; hãy xem lại cấu trúc nội dung theo ngữ cảnh."
+        : "Không phát hiện bước nhảy cấp heading.",
+    evidence: pageData.headingLevels.length === 0
+      ? "Không tìm thấy thẻ H1–H6."
+      : `Thứ tự cấp: ${pageData.headingLevels.map((level) => `H${level}`).join(" → ")}${skippedHeadingTransitions.length ? `; điểm cần xem: ${skippedHeadingTransitions.join(", ")}` : ""}.`,
+    sourceUrl: finalUrl,
+    timestamp,
+  });
+
+  const thinContent = pageData.bodyWordCount < SEO_THRESHOLDS.thinContentWordCount;
+  findings.push({
+    ruleId: "SEO_THIN_CONTENT",
+    ruleName: "Lượng văn bản hiển thị (heuristic)",
+    category: "SEO",
+    severity: thinContent ? "LOW" : "INFO",
+    status: thinContent ? "REVIEW_REQUIRED" : "PASS",
+    description: thinContent
+      ? `Tìm thấy ít hơn ${SEO_THRESHOLDS.thinContentWordCount} từ; số từ đơn lẻ không xác định chất lượng nội dung.`
+      : `Tìm thấy ít nhất ${SEO_THRESHOLDS.thinContentWordCount} từ theo bộ đếm đơn giản.`,
+    evidence: `Ước tính ${pageData.bodyWordCount} từ hiển thị; ngưỡng rà soát nội bộ là <${SEO_THRESHOLDS.thinContentWordCount}.`,
+    sourceUrl: finalUrl,
+    timestamp,
+  });
 
   // Check 8: Meta Viewport (Mobile Responsiveness)
   if (pageData.viewport && /width=device-width/i.test(pageData.viewport)) {
@@ -561,28 +642,5 @@ export function analyzeWebsite({
     });
   }
 
-  // Compute summary stats
-  const passCount = findings.filter((f) => f.status === "PASS").length;
-  const failCount = findings.filter((f) => f.status === "FAIL").length;
-  const unknownCount = findings.filter((f) => f.status === "UNKNOWN").length;
-
-  const criticalCount = findings.filter((f) => f.severity === "CRITICAL" && f.status === "FAIL").length;
-  const highCount = findings.filter((f) => f.severity === "HIGH" && f.status === "FAIL").length;
-  const mediumCount = findings.filter((f) => f.severity === "MEDIUM" && f.status === "FAIL").length;
-  const lowCount = findings.filter((f) => f.severity === "LOW" && f.status === "FAIL").length;
-  const infoCount = findings.filter((f) => f.severity === "INFO").length;
-
-  const summary: ScanSummary = {
-    totalRules: findings.length,
-    passCount,
-    failCount,
-    unknownCount,
-    criticalCount,
-    highCount,
-    mediumCount,
-    lowCount,
-    infoCount,
-  };
-
-  return { findings, summary, pageData };
+  return finish();
 }
