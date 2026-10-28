@@ -120,9 +120,8 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
   });
 
   const activeFinding: ScanFinding | undefined =
-    allFindings.find((f) => f.ruleId === selectedRuleId) ||
-    displayedFindings[0] ||
-    allFindings[0];
+    displayedFindings.find((f) => f.ruleId === selectedRuleId) ||
+    displayedFindings[0];
 
   const isCurrentActiveVerified = activeFinding ? Boolean(verifiedMap[activeFinding.ruleId]) : false;
 
@@ -316,211 +315,377 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
 
       {/* TAB 1: Các vấn đề & bằng chứng (Issue-first SEO Layout) */}
       {activeTab === "issues" && (
-        <div className="split">
-          {/* Left Column: Issue List */}
-          <section className="panel" aria-label="Danh sách vấn đề">
-            <div className="panelHead" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-              <div style={{ minWidth: 0 }}>
-                <h3>Vấn đề cần ưu tiên xử lý</h3>
-                <p className="hint">Chọn một mục để kiểm tra phạm vi và hướng dẫn.</p>
-              </div>
-              <select
-                className="form-select"
-                style={{ width: "auto", minWidth: 150 }}
-                value={filterMode}
-                onChange={(e) => setFilterMode(e.target.value as "all" | "high" | "medium" | "pass")}
-                aria-label="Lọc mức độ vấn đề"
+        <>
+          {failFindings.length === 0 && filterMode !== "pass" ? (
+            <section
+              className="panel panPad"
+              style={{ textAlign: "center", padding: "52px 24px" }}
+              aria-label="Kết quả kiểm tra website"
+            >
+              <div
+                className="empty-icon"
+                style={{ fontSize: 28, width: 52, height: 52, margin: "0 auto 16px" }}
               >
-                <option value="all">Tất cả vấn đề ({failFindings.length})</option>
-                <option value="high">Mức cao ({highCount})</option>
-                <option value="medium">Trung bình ({medCount})</option>
-                <option value="pass">Đạt chuẩn ({passFindings.length})</option>
-              </select>
-            </div>
-
-            {displayedFindings.length === 0 ? (
-              <div className="empty-state" style={{ padding: "36px 20px" }}>
-                <div className="empty-icon">✓</div>
-                <h3>Chưa phát hiện vấn đề</h3>
-                <p>
-                  Chưa phát hiện vấn đề trong phạm vi 10 nhóm kiểm tra kỹ thuật của URL này. Kết quả chưa bao gồm toàn bộ website, PageSpeed hoặc phân tích nhiều URL.
-                </p>
-                <div className="actions" style={{ justifyContent: "center", marginTop: 16 }}>
-                  <button
-                    type="button"
-                    className="button button-small"
-                    onClick={() => setFilterMode("pass")}
-                  >
-                    Xem 10 tiêu chí đạt chuẩn ({passFindings.length})
-                  </button>
-                </div>
+                ✓
               </div>
-            ) : (
-              <div>
-                {displayedFindings.map((finding) => {
-                  const isSelected = activeFinding?.ruleId === finding.ruleId;
-                  const isVerified = Boolean(verifiedMap[finding.ruleId]);
-                  const isPass = finding.status === "PASS";
-                  const isHigh = finding.severity === "CRITICAL" || finding.severity === "HIGH";
-
-                  return (
-                    <div
-                      key={finding.ruleId}
-                      className={`issueRow ${isSelected ? "sel" : ""} ${isPass ? "pass-row" : ""}`}
-                      onClick={() => setSelectedRuleId(finding.ruleId)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          setSelectedRuleId(finding.ruleId);
-                        }
-                      }}
-                      aria-current={isSelected ? "true" : undefined}
-                    >
-                      <span className="ic" aria-hidden="true">
-                        {isPass ? "✓" : isHigh ? "!" : "•"}
-                      </span>
-                      <div style={{ minWidth: 0 }}>
-                        <strong>{finding.ruleName}</strong>
-                        <small>{finding.description}</small>
-                      </div>
-                      <b style={{ fontSize: 12 }}>1 URL</b>
-                      <span className="hideMob">
-                        <span
-                          className={`chip ${
-                            isPass ? "green" : isHigh ? "bad" : "warn"
-                          }`}
-                        >
-                          {isPass ? "Đạt chuẩn" : isHigh ? "Cao" : "Trung bình"}
-                        </span>
-                      </span>
-                      <span className="hideMob">
-                        <span className={`chip ${isVerified ? "green" : "warn"}`}>
-                          {isVerified ? "Đã xác minh" : "Chưa xác minh"}
-                        </span>
-                      </span>
-                    </div>
-                  );
-                })}
+              <h2
+                style={{
+                  fontSize: 20,
+                  fontWeight: 750,
+                  color: "var(--fg)",
+                  marginBottom: 8,
+                  letterSpacing: "-.3px",
+                }}
+              >
+                Chưa phát hiện vấn đề kỹ thuật
+              </h2>
+              <p
+                style={{
+                  maxWidth: 580,
+                  margin: "0 auto 20px",
+                  color: "var(--text-secondary)",
+                  fontSize: 13.5,
+                  lineHeight: 1.6,
+                }}
+              >
+                Chưa phát hiện vấn đề trong phạm vi 10 nhóm kiểm tra kỹ thuật của URL này. Kết quả chưa bao gồm toàn bộ website, PageSpeed hoặc phân tích nhiều URL.
+              </p>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  justifyContent: "center",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={() => {
+                    setFilterMode("pass");
+                    setSelectedRuleId(passFindings[0]?.ruleId || null);
+                  }}
+                >
+                  Xem 10 tiêu chí đạt chuẩn ({passFindings.length}) →
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => executeScan(targetUrl)}
+                  disabled={isPending}
+                >
+                  {isPending ? "Đang quét…" : "↻ Quét lại website"}
+                </button>
               </div>
-            )}
-          </section>
-
-          {/* Right Column: Evidence & Detail Panel */}
-          <section className="panel panPad detail" aria-label="Chi tiết bằng chứng">
-            {activeFinding ? (
-              <>
-                <div className="row space" style={{ marginBottom: 8 }}>
-                  <span className="kicker">CHI TIẾT VẤN ĐỀ</span>
-                  <span className={`chip ${isCurrentActiveVerified ? "green" : "warn"}`}>
-                    {isCurrentActiveVerified ? "Đã xác minh" : "Chưa xác minh"}
-                  </span>
-                </div>
-
-                <h2>{activeFinding.ruleName}</h2>
-                <p>{activeFinding.description}</p>
-
-                <div className="miniTitle">Bằng chứng từ lần quét</div>
-                <div className="evidence">
-                  <div className="evrow">
-                    <span>Phương pháp phát hiện</span>
-                    <strong>Kiểm tra an toàn (OWASP SSRF & Safe Fetcher)</strong>
+            </section>
+          ) : (
+            <div className="split">
+              {/* Left Column: Issue List */}
+              <section className="panel" aria-label="Danh sách vấn đề">
+                <div className="panelHead" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <h3>{filterMode === "pass" ? "Tiêu chí đạt chuẩn kỹ thuật" : "Vấn đề cần ưu tiên xử lý"}</h3>
+                    <p className="hint">
+                      {filterMode === "pass" ? "Danh sách 10 tiêu chí kỹ thuật đã vượt qua kiểm tra." : "Chọn một mục để kiểm tra phạm vi và hướng dẫn."}
+                    </p>
                   </div>
-                  <div className="evrow">
-                    <span>URL ảnh hưởng</span>
-                    <strong>{targetUrl} (1 trang)</strong>
-                  </div>
-                  <div className="evrow">
-                    <span>Mức độ ưu tiên</span>
-                    <strong>
-                      {activeFinding.severity === "CRITICAL" || activeFinding.severity === "HIGH"
-                        ? "Mức cao"
-                        : activeFinding.severity === "MEDIUM"
-                        ? "Trung bình"
-                        : "Thông tin / Đạt chuẩn"}
-                    </strong>
-                  </div>
-                  <div className="evrow">
-                    <span>Trạng thái kiểm tra</span>
-                    <strong>{activeFinding.status === "FAIL" ? "Phát hiện vấn đề" : "Đạt chuẩn"}</strong>
-                  </div>
-
-                  <div className="divider" />
-
-                  <div className="sub" style={{ marginBottom: 6 }}>
-                    URL điển hình được kiểm tra:
-                  </div>
-                  <div
-                    className="kv"
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      padding: "6px 0",
-                      borderBottom: "1px solid #edf1ed",
-                      fontSize: 12,
-                      marginBottom: 8,
+                  <select
+                    className="form-select"
+                    style={{ width: "auto", minWidth: 150 }}
+                    value={filterMode}
+                    onChange={(e) => {
+                      const mode = e.target.value as "all" | "high" | "medium" | "pass";
+                      setFilterMode(mode);
+                      const matching = allFindings.filter((f) => {
+                        if (mode === "all") return f.status === "FAIL";
+                        if (mode === "high") return f.status === "FAIL" && (f.severity === "CRITICAL" || f.severity === "HIGH");
+                        if (mode === "medium") return f.status === "FAIL" && f.severity === "MEDIUM";
+                        if (mode === "pass") return f.status === "PASS";
+                        return true;
+                      });
+                      setSelectedRuleId(matching[0]?.ruleId || null);
                     }}
+                    aria-label="Lọc mức độ vấn đề"
                   >
-                    <span className="linkish">{targetUrl}</span>
-                    <span className="chip blue">Kiểm tra HTML & Headers</span>
-                  </div>
-
-                  <div className="sub" style={{ marginBottom: 6 }}>
-                    Dữ liệu bằng chứng kỹ thuật:
-                  </div>
-                  <div className="evidence-snippet">
-                    {typeof activeFinding.evidence === "string"
-                      ? activeFinding.evidence
-                      : JSON.stringify(activeFinding.evidence, null, 2)}
-                  </div>
+                    <option value="all">Tất cả vấn đề ({failFindings.length})</option>
+                    <option value="high">Mức cao ({highCount})</option>
+                    <option value="medium">Trung bình ({medCount})</option>
+                    <option value="pass">Đạt chuẩn ({passFindings.length})</option>
+                  </select>
                 </div>
 
-                <div className="miniTitle">Đề xuất cải thiện</div>
-                <div className="alert green">
-                  <b>{activeFinding.recommendation || "Tiếp tục duy trì cấu hình hiện tại."}</b>
-                </div>
+                {displayedFindings.length === 0 ? (
+                  <div className="empty-state" style={{ padding: "36px 20px" }}>
+                    <div className="empty-icon">✓</div>
+                    <h3>Chưa phát hiện vấn đề</h3>
+                    <p>
+                      Không có vấn đề nào trong bộ lọc này. Bạn có thể chuyển sang xem các tiêu chí đạt chuẩn.
+                    </p>
+                    <div className="actions" style={{ justifyContent: "center", marginTop: 16 }}>
+                      <button
+                        type="button"
+                        className="button button-small"
+                        onClick={() => {
+                          setFilterMode("pass");
+                          setSelectedRuleId(passFindings[0]?.ruleId || null);
+                        }}
+                      >
+                        Xem 10 tiêu chí đạt chuẩn ({passFindings.length})
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    {displayedFindings.map((finding) => {
+                      const isSelected = activeFinding?.ruleId === finding.ruleId;
+                      const isVerified = Boolean(verifiedMap[finding.ruleId]);
+                      const isPass = finding.status === "PASS";
+                      const isHigh = finding.severity === "CRITICAL" || finding.severity === "HIGH";
 
-                <label className="toggle" style={{ marginTop: 16 }}>
-                  <input
-                    type="checkbox"
-                    checked={isCurrentActiveVerified}
-                    onChange={() => toggleVerify(activeFinding.ruleId)}
-                    aria-label="Xác nhận đối chiếu bằng chứng"
-                  />
-                  <span>Tôi đã xem và đối chiếu bằng chứng (phiên làm việc hiện tại)</span>
-                </label>
+                      return (
+                        <div
+                          key={finding.ruleId}
+                          className={`issueRow ${isSelected ? "sel" : ""} ${isPass ? "pass-row" : ""}`}
+                          onClick={() => setSelectedRuleId(finding.ruleId)}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setSelectedRuleId(finding.ruleId);
+                            }
+                          }}
+                          aria-current={isSelected ? "true" : undefined}
+                        >
+                          <span
+                            className="ic"
+                            aria-hidden="true"
+                            style={isPass ? { background: "var(--mint)", color: "var(--green)" } : undefined}
+                          >
+                            {isPass ? "✓" : isHigh ? "!" : "•"}
+                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <strong>{finding.ruleName}</strong>
+                            <small>{finding.description}</small>
+                          </div>
+                          <b style={{ fontSize: 12 }}>1 URL</b>
+                          <span className="hideMob">
+                            <span
+                              className={`chip ${
+                                isPass ? "green" : isHigh ? "bad" : "warn"
+                              }`}
+                            >
+                              {isPass ? "Đạt chuẩn" : isHigh ? "Cao" : "Trung bình"}
+                            </span>
+                          </span>
+                          <span className="hideMob">
+                            {isPass ? (
+                              <span className="chip green">Hợp lệ</span>
+                            ) : (
+                              <span className={`chip ${isVerified ? "green" : "warn"}`}>
+                                {isVerified ? "Đã xác minh" : "Chưa xác minh"}
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
 
-                <div className="btnline">
-                  <button
-                    type="button"
-                    className={`button ${isCurrentActiveVerified ? "" : "button-primary"}`}
-                    onClick={() => toggleVerify(activeFinding.ruleId)}
-                  >
-                    {isCurrentActiveVerified ? "✓ Đã xác minh" : "✓ Xác minh vấn đề"}
-                  </button>
-                  <button
-                    type="button"
-                    className="button button-primary"
-                    disabled={!isCurrentActiveVerified}
-                    onClick={handleAddToOutreach}
-                  >
-                    ＋ Đưa vào đề xuất
-                  </button>
-                </div>
+              {/* Right Column: Evidence & Detail Panel */}
+              <section className="panel panPad detail" aria-label="Chi tiết bằng chứng">
+                {activeFinding ? (
+                  <>
+                    {activeFinding.status === "PASS" ? (
+                      /* PASS Finding Detail: Informative, NO verify/outreach buttons */
+                      <>
+                        <div className="row space" style={{ marginBottom: 8 }}>
+                          <span className="kicker">TIÊU CHÍ ĐẠT CHUẨN KỸ THUẬT</span>
+                          <span className="chip green">Đạt chuẩn (PASS)</span>
+                        </div>
 
-                <p className="hint" style={{ marginTop: 14 }}>
-                  Hệ thống thật sẽ lưu người xác minh, thời điểm và URL bằng chứng ở Phase 03B/04.
-                </p>
-              </>
-            ) : (
-              <div className="empty-state">
-                <p>Chọn một vấn đề ở danh sách bên trái để xem bằng chứng chi tiết.</p>
-              </div>
-            )}
-          </section>
-        </div>
+                        <h2>{activeFinding.ruleName}</h2>
+                        <p>{activeFinding.description}</p>
+
+                        <div className="miniTitle">Bằng chứng từ lần quét</div>
+                        <div className="evidence">
+                          <div className="evrow">
+                            <span>Phương pháp phát hiện</span>
+                            <strong>Kiểm tra an toàn (OWASP SSRF & Safe Fetcher)</strong>
+                          </div>
+                          <div className="evrow">
+                            <span>URL kiểm tra</span>
+                            <strong>{targetUrl} (1 trang)</strong>
+                          </div>
+                          <div className="evrow">
+                            <span>Mức độ ưu tiên</span>
+                            <strong>Thông tin / Đạt chuẩn (PASS)</strong>
+                          </div>
+                          <div className="evrow">
+                            <span>Trạng thái kiểm tra</span>
+                            <strong>Đạt chuẩn kỹ thuật (PASS)</strong>
+                          </div>
+
+                          <div className="divider" />
+
+                          <div className="sub" style={{ marginBottom: 6 }}>
+                            URL điển hình được kiểm tra:
+                          </div>
+                          <div
+                            className="kv"
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              padding: "6px 0",
+                              borderBottom: "1px solid #edf1ed",
+                              fontSize: 12,
+                              marginBottom: 8,
+                            }}
+                          >
+                            <span className="linkish">{targetUrl}</span>
+                            <span className="chip blue">Kiểm tra HTML & Headers</span>
+                          </div>
+
+                          <div className="sub" style={{ marginBottom: 6 }}>
+                            Dữ liệu bằng chứng kỹ thuật:
+                          </div>
+                          <div className="evidence-snippet">
+                            {typeof activeFinding.evidence === "string"
+                              ? activeFinding.evidence
+                              : JSON.stringify(activeFinding.evidence, null, 2)}
+                          </div>
+                        </div>
+
+                        <div className="miniTitle">Đánh giá kỹ thuật</div>
+                        <div className="alert green">
+                          <b>✓ Tiêu chí đạt chuẩn:</b> Cấu hình hiện tại của website đáp ứng tốt tiêu chuẩn kỹ thuật và khuyến nghị SEO cơ bản.
+                        </div>
+
+                        <div className="alert blue" style={{ marginTop: 14 }}>
+                          <b>Không cần đưa vào đề xuất:</b> Tiêu chí đã đạt chuẩn kỹ thuật thì không cần xác minh hay tạo bản nháp liên hệ doanh nghiệp.
+                        </div>
+                      </>
+                    ) : (
+                      /* FAIL Finding Detail: Actionable with Verify checkbox & Add to outreach */
+                      <>
+                        <div className="row space" style={{ marginBottom: 8 }}>
+                          <span className="kicker">CHI TIẾT VẤN ĐỀ</span>
+                          <span className={`chip ${isCurrentActiveVerified ? "green" : "warn"}`}>
+                            {isCurrentActiveVerified ? "Đã xác minh" : "Chưa xác minh"}
+                          </span>
+                        </div>
+
+                        <h2>{activeFinding.ruleName}</h2>
+                        <p>{activeFinding.description}</p>
+
+                        <div className="miniTitle">Bằng chứng từ lần quét</div>
+                        <div className="evidence">
+                          <div className="evrow">
+                            <span>Phương pháp phát hiện</span>
+                            <strong>Kiểm tra an toàn (OWASP SSRF & Safe Fetcher)</strong>
+                          </div>
+                          <div className="evrow">
+                            <span>URL ảnh hưởng</span>
+                            <strong>{targetUrl} (1 trang)</strong>
+                          </div>
+                          <div className="evrow">
+                            <span>Mức độ ưu tiên</span>
+                            <strong>
+                              {activeFinding.severity === "CRITICAL" || activeFinding.severity === "HIGH"
+                                ? "Mức cao"
+                                : activeFinding.severity === "MEDIUM"
+                                ? "Trung bình"
+                                : "Thông tin"}
+                            </strong>
+                          </div>
+                          <div className="evrow">
+                            <span>Trạng thái kiểm tra</span>
+                            <strong>Phát hiện vấn đề (FAIL)</strong>
+                          </div>
+
+                          <div className="divider" />
+
+                          <div className="sub" style={{ marginBottom: 6 }}>
+                            URL điển hình được kiểm tra:
+                          </div>
+                          <div
+                            className="kv"
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              padding: "6px 0",
+                              borderBottom: "1px solid #edf1ed",
+                              fontSize: 12,
+                              marginBottom: 8,
+                            }}
+                          >
+                            <span className="linkish">{targetUrl}</span>
+                            <span className="chip blue">Kiểm tra HTML & Headers</span>
+                          </div>
+
+                          <div className="sub" style={{ marginBottom: 6 }}>
+                            Dữ liệu bằng chứng kỹ thuật:
+                          </div>
+                          <div className="evidence-snippet">
+                            {typeof activeFinding.evidence === "string"
+                              ? activeFinding.evidence
+                              : JSON.stringify(activeFinding.evidence, null, 2)}
+                          </div>
+                        </div>
+
+                        <div className="miniTitle">Đề xuất cải thiện</div>
+                        <div className="alert green">
+                          <b>{activeFinding.recommendation || "Tiếp tục duy trì cấu hình hiện tại."}</b>
+                        </div>
+
+                        <label className="toggle" style={{ marginTop: 16 }}>
+                          <input
+                            type="checkbox"
+                            checked={isCurrentActiveVerified}
+                            onChange={() => toggleVerify(activeFinding.ruleId)}
+                            aria-label="Xác nhận đối chiếu bằng chứng"
+                          />
+                          <span>Tôi đã xem và đối chiếu bằng chứng (phiên làm việc hiện tại)</span>
+                        </label>
+
+                        <div className="btnline">
+                          <button
+                            type="button"
+                            className={`button ${isCurrentActiveVerified ? "" : "button-primary"}`}
+                            onClick={() => toggleVerify(activeFinding.ruleId)}
+                          >
+                            {isCurrentActiveVerified ? "✓ Đã xác minh" : "✓ Xác minh vấn đề"}
+                          </button>
+                          <button
+                            type="button"
+                            className="button button-primary"
+                            disabled={!isCurrentActiveVerified}
+                            onClick={handleAddToOutreach}
+                          >
+                            ＋ Đưa vào đề xuất
+                          </button>
+                        </div>
+
+                        <p className="hint" style={{ marginTop: 14 }}>
+                          Hệ thống thật sẽ lưu người xác minh, thời điểm và URL bằng chứng ở Phase 03B/04.
+                        </p>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <div className="empty-state">
+                    <p>Chọn một mục ở danh sách bên trái để xem chi tiết.</p>
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
+        </>
       )}
 
       {/* TAB 2: URL đã quét (Single-URL Scanned Table + Detail Modal) */}
