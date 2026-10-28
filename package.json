@@ -10,6 +10,7 @@
     "type-check": "tsc --noEmit",
     "test:foundation": "tsx scripts/test-foundation.ts",
     "test:business": "tsx scripts/test-business.ts && tsx scripts/test-business-regressions.ts",
+    "test:scanner": "tsx scripts/test-scanner.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

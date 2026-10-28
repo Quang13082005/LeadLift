@@ -300,3 +300,265 @@ h1, h2, h3, p { margin-top: 0; }
   .module-tab { padding: 10px 8px; }
 }
 
+/* ==========================================================================
+   LEADLIFT — PHASE 03A: WEBSITE SCANNER & AUDIT STYLES
+   ========================================================================== */
+
+.audit-control-card {
+  padding: 16px 20px;
+  background: white;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-card);
+  margin-bottom: 16px;
+}
+
+.audit-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.audit-biz-select {
+  flex: 1 1 240px;
+  min-width: 200px;
+  height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
+  background: white;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.audit-url-input {
+  flex: 2 1 320px;
+  min-width: 260px;
+  height: 42px;
+  padding: 8px 14px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
+  background: white;
+  font-size: 13px;
+  font-family: monospace;
+  color: var(--fg);
+}
+
+.audit-url-input:focus, .audit-biz-select:focus {
+  border-color: var(--green);
+  outline: 2px solid #a3dbbf;
+}
+
+.audit-meta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: #f7fbf8;
+  border: 1px solid #dbeef1;
+  border-radius: 10px;
+  margin-bottom: 16px;
+}
+
+.audit-target-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.audit-target-title {
+  font-size: 14px;
+  font-weight: 750;
+  color: var(--fg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audit-target-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.audit-target-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Findings List & Details */
+.finding-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--edge);
+  cursor: pointer;
+  transition: background-color .12s;
+}
+
+.finding-item:hover {
+  background-color: #f7faf8;
+}
+
+.finding-item.active {
+  background-color: #eef8f2;
+  border-left: 3px solid var(--green);
+}
+
+.finding-status-badge {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.status-pass {
+  background: var(--mint);
+  color: var(--green);
+}
+
+.status-fail {
+  background: #ffebeb;
+  color: var(--red);
+}
+
+.status-unknown {
+  background: #edf2ff;
+  color: #426ab4;
+}
+
+.severity-pill {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 99px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+
+.sev-critical {
+  background: #7a1614;
+  color: white;
+}
+
+.sev-high {
+  background: #c34a45;
+  color: white;
+}
+
+.sev-medium {
+  background: #e4871b;
+  color: white;
+}
+
+.sev-low {
+  background: #f1dfbd;
+  color: #885a1b;
+}
+
+.sev-info {
+  background: #eef3ef;
+  color: #577569;
+}
+
+.finding-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.finding-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fg);
+  margin-bottom: 3px;
+}
+
+.finding-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* Detail Panel Specifics */
+.evidence-card {
+  background: #f7faf8;
+  border: 1px solid #dceddf;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+
+.evidence-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.evidence-text {
+  font-size: 12px;
+  font-family: monospace;
+  color: #1f3b2f;
+  background: white;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #e1eee4;
+  word-break: break-word;
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.recommendation-card {
+  background: #eff9f3;
+  border: 1px solid #c9eed7;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #0d6e53;
+}
+
+.recommendation-card strong {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  margin-bottom: 4px;
+}
+
+.check-verify-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--fg);
+  margin: 14px 0 8px;
+  cursor: pointer;
+}
+
+.redirect-hop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #f9fbf9;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: monospace;
+  margin-bottom: 6px;
+}
+
+.hop-arrow {
+  color: var(--green);
+  font-weight: bold;
+}
+
