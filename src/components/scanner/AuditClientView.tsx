@@ -1,568 +1,822 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { PageHeading, FeatureBanner, PendingBadge } from "@/components/page-foundation";
-import { Button, Panel, StatCard, EmptyState, LoadingState, Badge } from "@/components/ui/primitives";
+import { useState, useEffect, useRef, useCallback, useTransition, type FormEvent } from "react";
+import Link from "next/link";
+import { PageHeading, FeatureBanner } from "@/components/page-foundation";
+import { Button, Badge } from "@/components/ui/primitives";
+import { Dialog } from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/toast";
 import { scanWebsiteAction } from "@/app/actions/scanner";
 import type { BusinessItem } from "@/types/business";
-import type { ScanResult, RuleId } from "@/types/scanner";
+import type { ScanResult, ScanFinding, RuleId } from "@/types/scanner";
 
 interface AuditClientViewProps {
   initialBusinesses: BusinessItem[];
 }
 
 export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
-  const [selectedBizId, setSelectedBizId] = useState<string>(
-    initialBusinesses.length > 0 ? initialBusinesses[0].id : "custom"
+  const showToast = useToast();
+
+  // Selected business & URL state
+  const defaultBiz = initialBusinesses.length > 0 ? initialBusinesses[0] : null;
+  const [selectedBizId, setSelectedBizId] = useState<string>(defaultBiz ? defaultBiz.id : "custom");
+  const [targetUrl, setTargetUrl] = useState<string>(
+    defaultBiz?.websiteUrl || "https://lacadanang.quangdev.id.vn"
   );
-  const [urlInput, setUrlInput] = useState<string>(
-    initialBusinesses.length > 0 ? initialBusinesses[0].websiteUrl : "https://lacadanang.quangdev.id.vn"
-  );
+  const [modalUrlInput, setModalUrlInput] = useState<string>(targetUrl);
+
+  // Scan state
   const [isPending, startTransition] = useTransition();
-  const [progressMsg, setProgressMsg] = useState<string>("");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanError, setScanError] = useState<{ message: string; code?: string } | null>(null);
+  const [scanTimestamp, setScanTimestamp] = useState<string>("");
 
   // Tab & Filters
-  const [activeTab, setActiveTab] = useState<"issues" | "technical">("issues");
-  const [filterMode, setFilterMode] = useState<"ALL" | "FAIL" | "PASS">("ALL");
+  const [activeTab, setActiveTab] = useState<"issues" | "pages" | "history">("issues");
+  const [filterMode, setFilterMode] = useState<"all" | "high" | "medium" | "pass">("all");
   const [selectedRuleId, setSelectedRuleId] = useState<RuleId | null>(null);
   const [verifiedMap, setVerifiedMap] = useState<Record<string, boolean>>({});
 
-  const handleSelectBusiness = (bizId: string) => {
-    setSelectedBizId(bizId);
-    if (bizId === "custom") {
-      return;
-    }
-    const found = initialBusinesses.find((b) => b.id === bizId);
-    if (found) {
-      setUrlInput(found.websiteUrl);
-    }
-  };
+  // Modals
+  const [isTargetDialogOpen, setIsTargetDialogOpen] = useState<boolean>(false);
+  const [isUrlModalOpen, setIsUrlModalOpen] = useState<boolean>(false);
 
-  const handleScan = () => {
-    if (!urlInput.trim()) return;
+  // Initial scan trigger (once)
+  const initialScanTriggered = useRef(false);
 
-    setScanError(null);
-    setProgressMsg("Đang kiểm tra bảo mật SSRF và xác minh URL...");
+  const executeScan = useCallback(
+    (urlToScan: string) => {
+      if (!urlToScan.trim() || isPending) return;
 
-    startTransition(async () => {
-      try {
-        setProgressMsg("Đang kết nối HTTP an toàn và tải dữ liệu trang web...");
-        const res = await scanWebsiteAction(urlInput.trim());
+      setScanError(null);
+      startTransition(async () => {
+        try {
+          const res = await scanWebsiteAction(urlToScan.trim());
+          if (!res.success || !res.data) {
+            setScanError({
+              message: res.error || "Quá trình quét website thất bại.",
+              code: res.code,
+            });
+            showToast(`Lỗi quét: ${res.error || "Không thể phân tích website"}`);
+            return;
+          }
 
-        if (!res.success || !res.data) {
-          setScanError({
-            message: res.error || "Quá trình quét website thất bại.",
-            code: res.code,
-          });
-          setProgressMsg("");
-          return;
+          setScanResult(res.data);
+          const now = new Date();
+          setScanTimestamp(
+            `${now.toLocaleDateString("vi-VN")} · ${now.toLocaleTimeString("vi-VN", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}`
+          );
+
+          // By default, select first FAIL finding, or first PASS if none fail
+          const firstFail = res.data.findings.find((f) => f.status === "FAIL");
+          setSelectedRuleId(firstFail ? firstFail.ruleId : res.data.findings[0]?.ruleId || null);
+          showToast("Đã hoàn tất phân tích an toàn website.");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Đã xảy ra lỗi không xác định.";
+          setScanError({ message: msg });
+          showToast(`Lỗi: ${msg}`);
         }
+      });
+    },
+    [isPending, showToast]
+  );
 
-        setScanResult(res.data);
-        setProgressMsg("");
+  useEffect(() => {
+    if (!initialScanTriggered.current && targetUrl) {
+      initialScanTriggered.current = true;
+      executeScan(targetUrl);
+    }
+  }, [targetUrl, executeScan]);
 
-        // Select first issue finding by default if exists
-        const firstFail = res.data.findings.find((f) => f.status === "FAIL");
-        setSelectedRuleId(firstFail ? firstFail.ruleId : res.data.findings[0]?.ruleId || null);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Đã xảy ra lỗi không xác định.";
-        setScanError({ message: msg });
-        setProgressMsg("");
-      }
-    });
-  };
+  const currentBiz = initialBusinesses.find((b) => b.id === selectedBizId);
+  const currentBizName = currentBiz?.name || "Doanh nghiệp tùy chọn";
+  const currentBizCity = currentBiz?.city || "Đà Nẵng";
 
-  const selectedBiz = initialBusinesses.find((b) => b.id === selectedBizId);
+  // Categorize findings
+  const allFindings = scanResult?.findings || [];
+  const failFindings = allFindings.filter((f) => f.status === "FAIL");
+  const passFindings = allFindings.filter((f) => f.status === "PASS");
 
-  // Filtered findings
-  const displayedFindings = (scanResult?.findings || []).filter((f) => {
-    if (filterMode === "FAIL") return f.status === "FAIL";
-    if (filterMode === "PASS") return f.status === "PASS";
+  const highCount = failFindings.filter(
+    (f) => f.severity === "CRITICAL" || f.severity === "HIGH"
+  ).length;
+  const medCount = failFindings.filter((f) => f.severity === "MEDIUM").length;
+  const verifiedCount = Object.values(verifiedMap).filter(Boolean).length;
+
+  // Filtered issues to display in Tab 1
+  const displayedFindings = allFindings.filter((f) => {
+    if (filterMode === "all") return f.status === "FAIL";
+    if (filterMode === "high") {
+      return f.status === "FAIL" && (f.severity === "CRITICAL" || f.severity === "HIGH");
+    }
+    if (filterMode === "medium") {
+      return f.status === "FAIL" && f.severity === "MEDIUM";
+    }
+    if (filterMode === "pass") return f.status === "PASS";
     return true;
   });
 
-  const activeFinding = scanResult?.findings.find((f) => f.ruleId === selectedRuleId) || displayedFindings[0];
+  const activeFinding: ScanFinding | undefined =
+    allFindings.find((f) => f.ruleId === selectedRuleId) ||
+    displayedFindings[0] ||
+    allFindings[0];
+
+  const isCurrentActiveVerified = activeFinding ? Boolean(verifiedMap[activeFinding.ruleId]) : false;
 
   const toggleVerify = (ruleId: string) => {
-    setVerifiedMap((prev) => ({
-      ...prev,
-      [ruleId]: !prev[ruleId],
-    }));
+    setVerifiedMap((prev) => {
+      const nextVal = !prev[ruleId];
+      showToast(nextVal ? "Đã ghi nhận xác minh (phiên làm việc hiện tại)." : "Đã hủy xác minh.");
+      return {
+        ...prev,
+        [ruleId]: nextVal,
+      };
+    });
+  };
+
+  const handleAddToOutreach = () => {
+    showToast("Đã thêm vấn đề vào danh sách đề xuất tiếp cận (phiên làm việc).");
+  };
+
+  const handleApplyTargetDialog = (e: FormEvent) => {
+    e.preventDefault();
+    setIsTargetDialogOpen(false);
+    if (selectedBizId !== "custom") {
+      const found = initialBusinesses.find((b) => b.id === selectedBizId);
+      if (found) {
+        setTargetUrl(found.websiteUrl);
+        executeScan(found.websiteUrl);
+        return;
+      }
+    }
+    if (modalUrlInput.trim()) {
+      setTargetUrl(modalUrlInput.trim());
+      executeScan(modalUrlInput.trim());
+    }
   };
 
   return (
     <>
       <PageHeading
         title="Website Audit"
-        description="Phát hiện vấn đề kỹ thuật có bằng chứng và xác minh trước khi đưa vào đề xuất hợp tác."
+        description="Phát hiện vấn đề, xem bằng chứng và xác minh trước khi đưa vào đề xuất."
       >
-        <Badge tone="green">PHASE 03A CORE</Badge>
+        <button
+          type="button"
+          className="button"
+          onClick={() => executeScan(targetUrl)}
+          disabled={isPending || !targetUrl.trim()}
+          aria-label="Quét lại website"
+        >
+          {isPending ? "Đang quét…" : "↻ Quét lại"}
+        </button>
+        <Link href="/outreach" className="button button-primary">
+          Xem đề xuất →
+        </Link>
       </PageHeading>
 
       <FeatureBanner
         kicker="PHÂN TÍCH · XÁC MINH · ĐỀ XUẤT"
-        title="Kiểm tra website có bằng chứng kỹ thuật"
-        description="Ưu tiên kết quả có thể giải thích rõ ràng cho chủ doanh nghiệp, không dùng điểm số giả lập."
+        title="Kiểm tra website có bằng chứng"
+        description="Ưu tiên kết quả có thể giải thích cho người kinh doanh, không chỉ là điểm SEO."
       />
 
-      {/* Target Selector & Scan Controller */}
-      <div className="audit-control-card">
-        <form
-          className="audit-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleScan();
-          }}
-        >
-          <select
-            className="audit-biz-select"
-            value={selectedBizId}
-            onChange={(e) => handleSelectBusiness(e.target.value)}
-            disabled={isPending}
-            aria-label="Chọn doanh nghiệp"
-          >
-            {initialBusinesses.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name} ({b.normalizedDomain})
-              </option>
-            ))}
-            <option value="custom">── Nhập URL website khác ──</option>
-          </select>
-
-          <input
-            type="text"
-            className="audit-url-input"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            placeholder="https://example.com"
-            disabled={isPending}
-            required
-            aria-label="Địa chỉ URL website"
-          />
-
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={isPending || !urlInput.trim()}
-          >
-            {isPending ? "Đang quét…" : scanResult ? "↻ Quét lại" : "⌕ Quét Website"}
-          </Button>
-        </form>
-
-        {isPending && (
-          <div style={{ marginTop: "14px" }}>
-            <LoadingState label={progressMsg || "Đang phân tích cấu trúc website…"} />
+      {/* Business Context Bar */}
+      <div
+        className="panel panPad"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 12,
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <strong>{currentBizName}</strong>{" "}
+          <span className="statusnote">
+            {targetUrl} · {currentBizCity}
+          </span>
+          <div className="sub" style={{ marginTop: 3 }}>
+            {scanTimestamp ? (
+              <>
+                Lượt quét: {scanTimestamp} • HTTP {scanResult?.httpStatus || 200} • Safe Fetcher (OWASP SSRF Protected)
+              </>
+            ) : isPending ? (
+              "Đang kết nối và kiểm tra bảo mật…"
+            ) : (
+              "Sẵn sàng quét website"
+            )}
           </div>
-        )}
+        </div>
+        <div className="actions" style={{ flexShrink: 0 }}>
+          <button
+            type="button"
+            className="button button-small"
+            onClick={() => {
+              setModalUrlInput(targetUrl);
+              setIsTargetDialogOpen(true);
+            }}
+          >
+            Đổi doanh nghiệp / URL
+          </button>
+          {isPending ? (
+            <Badge tone="amber">ĐANG PHÂN TÍCH</Badge>
+          ) : scanResult ? (
+            <Badge tone="green">ĐÃ QUÉT XONG</Badge>
+          ) : (
+            <Badge tone="blue">CHƯA QUÉT</Badge>
+          )}
+        </div>
       </div>
 
-      {/* Scan Error Display */}
-      {scanError && (
-        <div className="alert-box alert-red" style={{ marginBottom: "16px" }} role="alert">
-          <span className="alert-icon">⚠</span>
-          <div>
-            <strong>Không thể hoàn tất lượt quét:</strong>
-            <p style={{ margin: "4px 0 0" }}>{scanError.message}</p>
-            {scanError.code && (
-              <small style={{ color: "var(--text-secondary)" }}>
-                Mã lỗi bảo mật: <code>{scanError.code}</code>
-              </small>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Real Scan Metadata Bar */}
-      {scanResult && (
-        <div className="audit-meta-bar">
-          <div className="audit-target-info">
-            <div className="audit-target-title">
-              <span>{selectedBiz ? selectedBiz.name : scanResult.targetUrl}</span>
-              <a
-                href={scanResult.finalUrl}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="external-link"
-                style={{ fontSize: "12px" }}
-              >
-                {scanResult.finalUrl} ↗
-              </a>
-            </div>
-            <div className="audit-target-sub">
-              Lượt quét: {new Date(scanResult.scannedAt).toLocaleString("vi-VN")} • Di động / Máy tính • Không chạy JavaScript
-            </div>
-          </div>
-
-          <div className="audit-target-tags">
-            <span
-              className={`finding-status-badge ${
-                scanResult.httpStatus === 200 ? "status-pass" : "status-fail"
-              }`}
-            >
-              HTTP {scanResult.httpStatus} {scanResult.statusText}
-            </span>
-            <span className="chip green">
-              {scanResult.responseTimeMs}ms
-            </span>
-            <span className="chip">
-              {(scanResult.contentLength / 1024).toFixed(1)} KB
-            </span>
-            {scanResult.redirectCount > 0 && (
-              <span className="chip bad">
-                {scanResult.redirectCount} lần chuyển hướng
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Stats Cards */}
+      {/* 4 Stat Cards */}
       <div className="stats">
-        <StatCard
-          label="Tổng tiêu chí kiểm tra"
-          value={scanResult ? scanResult.summary.totalRules : null}
-          note="10 chỉ số kỹ thuật thật"
-        />
-        <StatCard
-          label="Đạt chuẩn (PASS)"
-          value={scanResult ? scanResult.summary.passCount : null}
-          note={scanResult ? "Hoạt động đúng chuẩn" : "Chờ kết quả"}
-        />
-        <StatCard
-          label="Vấn đề phát hiện (FAIL)"
-          value={scanResult ? scanResult.summary.failCount : null}
-          note={scanResult ? "Cần đối chiếu bằng chứng" : "Chờ kết quả"}
-        />
-        <StatCard
-          label="Đã xác minh thủ công"
-          value={
-            scanResult
-              ? Object.values(verifiedMap).filter(Boolean).length
-              : null
-          }
-          note="Sẵn sàng đưa vào đề xuất"
-        />
+        <div className="stat">
+          <div className="stat-label">Sức khỏe website</div>
+          <div className="stat-value">—</div>
+          <div className="stat-note">Chưa có điểm tổng hợp</div>
+        </div>
+
+        <div className="stat">
+          <div className="stat-label">URL đã kiểm tra</div>
+          <div className="stat-value">{scanResult ? 1 : 0}</div>
+          <div className="stat-note">Phạm vi Phase 03A: 1 URL</div>
+        </div>
+
+        <div className="stat">
+          <div className="stat-label">Nhóm tín hiệu cần xem</div>
+          <div className="stat-value" style={{ color: "#c34a45" }}>
+            {failFindings.length}
+          </div>
+          <div className="stat-note">Vấn đề phát hiện thực tế</div>
+        </div>
+
+        <div className="stat">
+          <div className="stat-label">Đã xác minh</div>
+          <div className="stat-value" style={{ color: "#00765a" }}>
+            {verifiedCount}
+          </div>
+          <div className="stat-note">Tạm thời (client-side)</div>
+        </div>
       </div>
 
       {/* Scope Disclaimer Banner */}
-      <div className="bannerMini" style={{ marginBottom: "16px" }}>
-        ⓘ <span>
-          <b>Phạm vi kiểm toán (Phase 03A):</b> Quét URL đơn lập có bằng chứng kỹ thuật thực tế. Chưa crawl sitemap hoặc lưu cơ sở dữ liệu Neon.
+      <div className="bannerMini">
+        <span aria-hidden="true" style={{ fontWeight: "bold", fontSize: 14 }}>ⓘ</span>
+        <span>
+          <b>Phạm vi kiểm toán:</b> Phase 03A phân tích 1 URL độc lập với 10 nhóm kiểm tra kỹ thuật an toàn (SSRF, SSL/TLS, Canonical, Heading H1, Meta Description, Viewport, OpenGraph, Robots, Redirect loop, Content Length). Không tự suy rộng thành toàn bộ website hay PageSpeed.
         </span>
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="module-tabs">
+      {/* Scan Error Alert if any */}
+      {scanError && (
+        <div className="alert-box alert-red" style={{ marginBottom: 16 }}>
+          <span className="alert-icon">⚠</span>
+          <div>
+            <strong>Lỗi quét website ({scanError.code || "SCAN_ERROR"}):</strong> {scanError.message}
+          </div>
+        </div>
+      )}
+
+      {/* 3 Tab Navigation */}
+      <div className="tabs" role="tablist" aria-label="Các mục kiểm tra website">
         <button
           type="button"
-          className={`module-tab ${activeTab === "issues" ? "active" : ""}`}
+          role="tab"
+          aria-selected={activeTab === "issues"}
+          className={`tab ${activeTab === "issues" ? "on" : ""}`}
           onClick={() => setActiveTab("issues")}
         >
-          Các vấn đề & bằng chứng {scanResult ? `(${scanResult.findings.length})` : ""}
+          Các vấn đề & bằng chứng {failFindings.length > 0 && `(${failFindings.length})`}
         </button>
         <button
           type="button"
-          className={`module-tab ${activeTab === "technical" ? "active" : ""}`}
-          onClick={() => setActiveTab("technical")}
+          role="tab"
+          aria-selected={activeTab === "pages"}
+          className={`tab ${activeTab === "pages" ? "on" : ""}`}
+          onClick={() => setActiveTab("pages")}
         >
-          Chi tiết kỹ thuật & Headers
+          URL đã quét (1)
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "history"}
+          className={`tab ${activeTab === "history" ? "on" : ""}`}
+          onClick={() => setActiveTab("history")}
+        >
+          Lịch sử & so sánh
         </button>
       </div>
 
-      {/* Content based on Active Tab */}
-      {!scanResult ? (
+      {/* TAB 1: Các vấn đề & bằng chứng (Issue-first SEO Layout) */}
+      {activeTab === "issues" && (
         <div className="split">
-          <Panel title="Các vấn đề & bằng chứng">
-            <EmptyState
-              icon="⌕"
-              title="Chưa có kết quả kiểm tra website"
-              description="Chọn một doanh nghiệp từ danh sách hoặc nhập địa chỉ URL được phép, sau đó nhấn 'Quét Website' để thực hiện phân tích an toàn."
-            />
-          </Panel>
-          <Panel title="Chi tiết bằng chứng">
-            <EmptyState
-              icon="▤"
-              title="Chưa có chi tiết để hiển thị"
-              description="Nội dung thẻ HTML, mã trạng thái và đề xuất tối ưu sẽ hiển thị tại đây sau khi hoàn tất lượt quét."
-            />
-          </Panel>
-        </div>
-      ) : activeTab === "issues" ? (
-        <div className="split">
-          {/* Left Column: Findings List */}
-          <Panel
-            title="Danh sách tiêu chí kiểm tra"
-            description="Chọn một mục để xem bằng chứng chi tiết trích xuất từ trang web."
-          >
-            {/* Filter pills */}
-            <div style={{ display: "flex", gap: "8px", padding: "10px 16px", borderBottom: "1px solid var(--edge)" }}>
-              <button
-                type="button"
-                className={`button button-small ${filterMode === "ALL" ? "button-primary" : "button-secondary"}`}
-                onClick={() => setFilterMode("ALL")}
+          {/* Left Column: Issue List */}
+          <section className="panel" aria-label="Danh sách vấn đề">
+            <div className="panelHead" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <h3>Vấn đề cần ưu tiên xử lý</h3>
+                <p className="hint">Chọn một mục để kiểm tra phạm vi và hướng dẫn.</p>
+              </div>
+              <select
+                className="form-select"
+                style={{ width: "auto", minWidth: 150 }}
+                value={filterMode}
+                onChange={(e) => setFilterMode(e.target.value as "all" | "high" | "medium" | "pass")}
+                aria-label="Lọc mức độ vấn đề"
               >
-                Tất cả ({scanResult.findings.length})
-              </button>
-              <button
-                type="button"
-                className={`button button-small ${filterMode === "FAIL" ? "button-primary" : "button-secondary"}`}
-                onClick={() => setFilterMode("FAIL")}
-              >
-                Vấn đề phát hiện ({scanResult.summary.failCount})
-              </button>
-              <button
-                type="button"
-                className={`button button-small ${filterMode === "PASS" ? "button-primary" : "button-secondary"}`}
-                onClick={() => setFilterMode("PASS")}
-              >
-                Đạt chuẩn ({scanResult.summary.passCount})
-              </button>
+                <option value="all">Tất cả vấn đề ({failFindings.length})</option>
+                <option value="high">Mức cao ({highCount})</option>
+                <option value="medium">Trung bình ({medCount})</option>
+                <option value="pass">Đạt chuẩn ({passFindings.length})</option>
+              </select>
             </div>
 
-            <div style={{ maxHeight: "580px", overflowY: "auto" }}>
-              {displayedFindings.map((finding) => {
-                const isSelected = activeFinding?.ruleId === finding.ruleId;
-                const isVerified = !!verifiedMap[finding.ruleId];
-
-                return (
-                  <div
-                    key={finding.ruleId}
-                    className={`finding-item ${isSelected ? "active" : ""}`}
-                    onClick={() => setSelectedRuleId(finding.ruleId)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        setSelectedRuleId(finding.ruleId);
-                      }
-                    }}
-                  >
-                    <span
-                      className={`finding-status-badge ${
-                        finding.status === "PASS"
-                          ? "status-pass"
-                          : finding.status === "FAIL"
-                          ? "status-fail"
-                          : "status-unknown"
-                      }`}
-                    >
-                      {finding.status === "PASS" ? "✓" : "✕"}
-                    </span>
-
-                    <div className="finding-content">
-                      <div className="finding-title" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <span>{finding.ruleName}</span>
-                        <span
-                          className={`severity-pill ${
-                            finding.severity === "CRITICAL"
-                              ? "sev-critical"
-                              : finding.severity === "HIGH"
-                              ? "sev-high"
-                              : finding.severity === "MEDIUM"
-                              ? "sev-medium"
-                              : finding.severity === "LOW"
-                              ? "sev-low"
-                              : "sev-info"
-                          }`}
-                        >
-                          {finding.severity}
-                        </span>
-                      </div>
-                      <p className="finding-desc">{finding.description}</p>
-                      {isVerified && (
-                        <small style={{ color: "var(--green)", fontWeight: "bold" }}>
-                          ✓ Đã đối chiếu bằng chứng
-                        </small>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-
-              {displayedFindings.length === 0 && (
-                <div style={{ padding: "24px", textAlign: "center", color: "var(--text-secondary)" }}>
-                  Không có tiêu chí nào thuộc bộ lọc này.
-                </div>
-              )}
-            </div>
-          </Panel>
-
-          {/* Right Column: Finding Details & Evidence */}
-          <Panel title="Chi tiết tiêu chí & Bằng chứng">
-            {activeFinding ? (
-              <div style={{ padding: "18px 20px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                  <span className="kicker">{activeFinding.category} · KIỂM TOÁN KỸ THUẬT</span>
-                  <span
-                    className={`finding-status-badge ${
-                      activeFinding.status === "PASS"
-                        ? "status-pass"
-                        : activeFinding.status === "FAIL"
-                        ? "status-fail"
-                        : "status-unknown"
-                    }`}
-                  >
-                    {activeFinding.status}
-                  </span>
-                </div>
-
-                <h3 style={{ fontSize: "17px", fontWeight: "800", margin: "4px 0 8px" }}>
-                  {activeFinding.ruleName}
-                </h3>
-                <p style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.5, margin: "0 0 14px" }}>
-                  {activeFinding.description}
+            {displayedFindings.length === 0 ? (
+              <div className="empty-state" style={{ padding: "36px 20px" }}>
+                <div className="empty-icon">✓</div>
+                <h3>Chưa phát hiện vấn đề</h3>
+                <p>
+                  Chưa phát hiện vấn đề trong phạm vi 10 nhóm kiểm tra kỹ thuật của URL này. Kết quả chưa bao gồm toàn bộ website, PageSpeed hoặc phân tích nhiều URL.
                 </p>
-
-                {/* Evidence Box */}
-                <div className="evidence-card">
-                  <div className="evidence-label">Bằng chứng trích xuất từ lượt quét thật</div>
-                  <pre className="evidence-text">{activeFinding.evidence}</pre>
-                </div>
-
-                {/* Recommendation if Fail */}
-                {activeFinding.recommendation && (
-                  <div className="recommendation-card">
-                    <strong>Đề xuất cải thiện kỹ thuật:</strong>
-                    {activeFinding.recommendation}
-                  </div>
-                )}
-
-                {/* Verification Checkbox */}
-                <label className="check-verify-label">
-                  <input
-                    type="checkbox"
-                    checked={!!verifiedMap[activeFinding.ruleId]}
-                    onChange={() => toggleVerify(activeFinding.ruleId)}
-                  />
-                  <span>
-                    Tôi đã kiểm tra đối chiếu bằng chứng này (xác minh thủ công trước khi lập đề xuất)
-                  </span>
-                </label>
-
-                <div style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid var(--edge)" }}>
-                  <small style={{ color: "var(--text-secondary)", display: "block" }}>
-                    URL nguồn: <code>{activeFinding.sourceUrl}</code>
-                  </small>
-                  <small style={{ color: "var(--text-secondary)", display: "block" }}>
-                    Thời điểm: {new Date(activeFinding.timestamp).toLocaleString("vi-VN")}
-                  </small>
+                <div className="actions" style={{ justifyContent: "center", marginTop: 16 }}>
+                  <button
+                    type="button"
+                    className="button button-small"
+                    onClick={() => setFilterMode("pass")}
+                  >
+                    Xem 10 tiêu chí đạt chuẩn ({passFindings.length})
+                  </button>
                 </div>
               </div>
             ) : (
-              <div style={{ padding: "30px", textAlign: "center", color: "var(--text-secondary)" }}>
-                Chọn một tiêu chí từ danh sách bên trái để xem bằng chứng.
+              <div>
+                {displayedFindings.map((finding) => {
+                  const isSelected = activeFinding?.ruleId === finding.ruleId;
+                  const isVerified = Boolean(verifiedMap[finding.ruleId]);
+                  const isPass = finding.status === "PASS";
+                  const isHigh = finding.severity === "CRITICAL" || finding.severity === "HIGH";
+
+                  return (
+                    <div
+                      key={finding.ruleId}
+                      className={`issueRow ${isSelected ? "sel" : ""} ${isPass ? "pass-row" : ""}`}
+                      onClick={() => setSelectedRuleId(finding.ruleId)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelectedRuleId(finding.ruleId);
+                        }
+                      }}
+                      aria-current={isSelected ? "true" : undefined}
+                    >
+                      <span className="ic" aria-hidden="true">
+                        {isPass ? "✓" : isHigh ? "!" : "•"}
+                      </span>
+                      <div style={{ minWidth: 0 }}>
+                        <strong>{finding.ruleName}</strong>
+                        <small>{finding.description}</small>
+                      </div>
+                      <b style={{ fontSize: 12 }}>1 URL</b>
+                      <span className="hideMob">
+                        <span
+                          className={`chip ${
+                            isPass ? "green" : isHigh ? "bad" : "warn"
+                          }`}
+                        >
+                          {isPass ? "Đạt chuẩn" : isHigh ? "Cao" : "Trung bình"}
+                        </span>
+                      </span>
+                      <span className="hideMob">
+                        <span className={`chip ${isVerified ? "green" : "warn"}`}>
+                          {isVerified ? "Đã xác minh" : "Chưa xác minh"}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
-          </Panel>
-        </div>
-      ) : (
-        /* Technical Details Tab */
-        <div className="stack">
-          {/* Redirect Chain */}
-          {scanResult.redirectChain.length > 0 && (
-            <Panel title="Chuỗi chuyển hướng (Redirect Chain)">
-              <div style={{ padding: "16px 20px" }}>
-                <p className="hint" style={{ marginBottom: "12px" }}>
-                  Website đã thực hiện {scanResult.redirectCount} lần chuyển hướng trước khi tới URL đích cuối cùng:
-                </p>
-                {scanResult.redirectChain.map((hop, idx) => (
-                  <div key={idx} className="redirect-hop">
-                    <span>[{idx + 1}] HTTP {hop.status}</span>
-                    <span className="hop-arrow">→</span>
-                    <span style={{ color: "var(--fg)" }}>{hop.from}</span>
-                    <span className="hop-arrow">↳</span>
-                    <span style={{ color: "var(--green)" }}>{hop.to}</span>
+          </section>
+
+          {/* Right Column: Evidence & Detail Panel */}
+          <section className="panel panPad detail" aria-label="Chi tiết bằng chứng">
+            {activeFinding ? (
+              <>
+                <div className="row space" style={{ marginBottom: 8 }}>
+                  <span className="kicker">CHI TIẾT VẤN ĐỀ</span>
+                  <span className={`chip ${isCurrentActiveVerified ? "green" : "warn"}`}>
+                    {isCurrentActiveVerified ? "Đã xác minh" : "Chưa xác minh"}
+                  </span>
+                </div>
+
+                <h2>{activeFinding.ruleName}</h2>
+                <p>{activeFinding.description}</p>
+
+                <div className="miniTitle">Bằng chứng từ lần quét</div>
+                <div className="evidence">
+                  <div className="evrow">
+                    <span>Phương pháp phát hiện</span>
+                    <strong>Kiểm tra an toàn (OWASP SSRF & Safe Fetcher)</strong>
                   </div>
-                ))}
+                  <div className="evrow">
+                    <span>URL ảnh hưởng</span>
+                    <strong>{targetUrl} (1 trang)</strong>
+                  </div>
+                  <div className="evrow">
+                    <span>Mức độ ưu tiên</span>
+                    <strong>
+                      {activeFinding.severity === "CRITICAL" || activeFinding.severity === "HIGH"
+                        ? "Mức cao"
+                        : activeFinding.severity === "MEDIUM"
+                        ? "Trung bình"
+                        : "Thông tin / Đạt chuẩn"}
+                    </strong>
+                  </div>
+                  <div className="evrow">
+                    <span>Trạng thái kiểm tra</span>
+                    <strong>{activeFinding.status === "FAIL" ? "Phát hiện vấn đề" : "Đạt chuẩn"}</strong>
+                  </div>
+
+                  <div className="divider" />
+
+                  <div className="sub" style={{ marginBottom: 6 }}>
+                    Dữ liệu bằng chứng kỹ thuật:
+                  </div>
+                  <div className="evidence-snippet">
+                    {typeof activeFinding.evidence === "string"
+                      ? activeFinding.evidence
+                      : JSON.stringify(activeFinding.evidence, null, 2)}
+                  </div>
+                </div>
+
+                <div className="miniTitle">Đề xuất cải thiện</div>
+                <div className="alert green">
+                  <b>{activeFinding.recommendation || "Tiếp tục duy trì cấu hình hiện tại."}</b>
+                </div>
+
+                <label className="toggle" style={{ marginTop: 16 }}>
+                  <input
+                    type="checkbox"
+                    checked={isCurrentActiveVerified}
+                    onChange={() => toggleVerify(activeFinding.ruleId)}
+                    aria-label="Xác nhận đối chiếu bằng chứng"
+                  />
+                  <span>Tôi đã xem và đối chiếu bằng chứng (phiên làm việc hiện tại)</span>
+                </label>
+
+                <div className="btnline">
+                  <button
+                    type="button"
+                    className={`button ${isCurrentActiveVerified ? "" : "button-primary"}`}
+                    onClick={() => toggleVerify(activeFinding.ruleId)}
+                  >
+                    {isCurrentActiveVerified ? "✓ Đã xác minh" : "✓ Xác minh vấn đề"}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    disabled={!isCurrentActiveVerified}
+                    onClick={handleAddToOutreach}
+                  >
+                    ＋ Đưa vào đề xuất
+                  </button>
+                </div>
+
+                <p className="hint" style={{ marginTop: 14 }}>
+                  Hệ thống thật sẽ lưu người xác minh, thời điểm và URL bằng chứng ở Phase 03B/04.
+                </p>
+              </>
+            ) : (
+              <div className="empty-state">
+                <p>Chọn một vấn đề ở danh sách bên trái để xem bằng chứng chi tiết.</p>
               </div>
-            </Panel>
-          )}
-
-          {/* Parsed Metadata Table */}
-          <Panel title="Thuộc tính thẻ HTML trích xuất">
-            <div className="table-responsive">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th style={{ width: "25%" }}>Thẻ HTML</th>
-                    <th>Nội dung trích xuất</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td><strong>&lt;title&gt;</strong></td>
-                    <td>{scanResult.pageData.title || <em>(Không có)</em>}</td>
-                  </tr>
-                  <tr>
-                    <td><strong>&lt;meta description&gt;</strong></td>
-                    <td>{scanResult.pageData.metaDescription || <em>(Không có)</em>}</td>
-                  </tr>
-                  <tr>
-                    <td><strong>&lt;link canonical&gt;</strong></td>
-                    <td>{scanResult.pageData.canonical || <em>(Không có)</em>}</td>
-                  </tr>
-                  <tr>
-                    <td><strong>&lt;meta robots&gt;</strong></td>
-                    <td>{scanResult.pageData.robotsMeta || <em>(Không có)</em>}</td>
-                  </tr>
-                  <tr>
-                    <td><strong>&lt;meta viewport&gt;</strong></td>
-                    <td>{scanResult.pageData.viewport || <em>(Không có)</em>}</td>
-                  </tr>
-                  <tr>
-                    <td><strong>&lt;h1&gt; (Số lượng: {scanResult.pageData.h1List.length})</strong></td>
-                    <td>
-                      {scanResult.pageData.h1List.length > 0 ? (
-                        <ul style={{ margin: 0, paddingLeft: "18px" }}>
-                          {scanResult.pageData.h1List.map((h, i) => (
-                            <li key={i}>{h}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <em>(Không có)</em>
-                      )}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td><strong>Open Graph (og:title)</strong></td>
-                    <td>{scanResult.pageData.ogTitle || <em>(Không có)</em>}</td>
-                  </tr>
-                  <tr>
-                    <td><strong>Open Graph (og:image)</strong></td>
-                    <td>{scanResult.pageData.ogImage || <em>(Không có)</em>}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </Panel>
-
-          {/* Response Headers Table */}
-          <Panel title="HTTP Response Headers">
-            <div className="table-responsive">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th style={{ width: "30%" }}>Header</th>
-                    <th>Giá trị</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(scanResult.headers).map(([key, val]) => (
-                    <tr key={key}>
-                      <td><code>{key}</code></td>
-                      <td style={{ wordBreak: "break-all", fontFamily: "monospace", fontSize: "12px" }}>
-                        {val}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Panel>
+            )}
+          </section>
         </div>
       )}
+
+      {/* TAB 2: URL đã quét (Single-URL Scanned Table + Detail Modal) */}
+      {activeTab === "pages" && (
+        <section className="panel" aria-label="Danh sách URL đã quét">
+          <div className="panelHead" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+            <div>
+              <h3>Danh sách URL đã quét</h3>
+              <p className="hint">
+                Nhấn vào URL để mở popup xem <b>tất cả các vấn đề</b>, bằng chứng và cách khắc phục theo từng trang.
+              </p>
+            </div>
+            <span className="chip green">DỮ LIỆU THỰC TẾ (PHASE 03A)</span>
+          </div>
+
+          <div className="tableWrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>URL</th>
+                  <th>HTTP</th>
+                  <th>Số vấn đề</th>
+                  <th>Mức ưu tiên</th>
+                  <th>Hành động</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  className="table-row-selectable"
+                  onClick={() => setIsUrlModalOpen(true)}
+                  title="Nhấn để xem toàn bộ vấn đề của URL này"
+                >
+                  <td>
+                    <div className="url-line">
+                      <button
+                        type="button"
+                        className="linkbutton"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsUrlModalOpen(true);
+                        }}
+                      >
+                        {targetUrl}
+                      </button>
+                      <span style={{ color: "#80a394" }} aria-hidden="true">↗</span>
+                    </div>
+                  </td>
+                  <td>
+                    <span className={`chip ${scanResult?.httpStatus === 200 ? "green" : "bad"}`}>
+                      {scanResult?.httpStatus || 200}
+                    </span>
+                  </td>
+                  <td>
+                    <b>{failFindings.length}</b> vấn đề
+                  </td>
+                  <td>
+                    <span
+                      className={`chip ${
+                        failFindings.length >= 3
+                          ? "bad"
+                          : failFindings.length > 0
+                          ? "warn"
+                          : "green"
+                      }`}
+                    >
+                      {failFindings.length >= 3
+                        ? "Cao"
+                        : failFindings.length > 0
+                        ? "Trung bình"
+                        : "Không có"}
+                    </span>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="button button-small"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsUrlModalOpen(true);
+                      }}
+                    >
+                      Xem chi tiết →
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="alert-box alert-blue" style={{ margin: 14 }}>
+            <span className="alert-icon">ⓘ</span>
+            <div>
+              Phase 03A phân tích đúng 1 URL ở phiên hiện tại. Kết quả hiển thị đúng bằng chứng thực tế từ backend scanner an toàn, không giả lập danh sách hàng trăm URL.
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* TAB 3: Lịch sử & so sánh */}
+      {activeTab === "history" && (
+        <div className="dual">
+          <section className="panel panPad" aria-label="Lịch sử kiểm tra">
+            <h3>Lịch sử kiểm tra</h3>
+            <div className="kv" style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #edf1ed", fontSize: 13 }}>
+              <span>{scanTimestamp || "Chưa quét"}</span>
+              <b>1 lượt quét thực tế (Phase 03A)</b>
+            </div>
+            <div className="alert-box alert-amber" style={{ marginTop: 16 }}>
+              <span className="alert-icon">⚠</span>
+              <div>
+                Không vẽ biểu đồ thay đổi khi chưa có ít nhất hai lượt quét thật có phạm vi tương ứng.
+              </div>
+            </div>
+          </section>
+
+          <section className="panel panPad" aria-label="So sánh giữa các lần quét">
+            <h3>So sánh giữa các lần quét</h3>
+            <div className="empty-state" style={{ padding: "28px 16px" }}>
+              <div className="empty-icon">◷</div>
+              <h3>Chưa lưu lịch sử kiểm tra</h3>
+              <p>Tính năng đối sánh lịch sử nhiều lần quét sẽ hoàn thiện ở Phase 03B.</p>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* Modal 1: URL Detail Modal (matches 01_Popup_URL_Nhieu_Van_De.png & Demo line 68) */}
+      <Dialog
+        id="url-detail-modal"
+        className="dialog-wide"
+        open={isUrlModalOpen}
+        onClose={() => setIsUrlModalOpen(false)}
+        title={
+          <div className="modalTopline" style={{ width: "100%" }}>
+            <div>
+              <div className="kicker">WEBSITE AUDIT / CHI TIẾT URL</div>
+              <h2 className="url-modal-heading">{targetUrl}</h2>
+              <div className="hint">
+                {targetUrl} · Lượt quét thực tế • Phase 03A
+              </div>
+            </div>
+          </div>
+        }
+      >
+        <div className="page-status-line">
+          <span className={`chip ${scanResult?.httpStatus === 200 ? "green" : "bad"}`}>
+            HTTP {scanResult?.httpStatus || 200}
+          </span>
+          <span className={`chip ${failFindings.length ? "bad" : "green"}`}>
+            {failFindings.length} vấn đề
+          </span>
+          <span className="status-caption">
+            Một URL có thể xuất hiện trong nhiều nhóm kiểm tra độc lập.
+          </span>
+        </div>
+
+        {failFindings.length > 0 ? (
+          <>
+            <div className="url-summary">
+              ⚠ Phát hiện {failFindings.length} tín hiệu trên cùng URL. Mở từng mục bên dưới để xem giải thích, bằng chứng và hướng sửa.
+            </div>
+
+            {failFindings.map((finding, idx) => (
+              <details key={finding.ruleId} className="url-issue" open={idx === 0}>
+                <summary>
+                  <span className="ic" style={{ flex: "none" }}>
+                    {finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "!" : "•"}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <b>{finding.ruleName}</b>
+                    <div className="status-caption">
+                      {finding.category} · Tín hiệu cần đối chiếu tại URL
+                    </div>
+                  </div>
+                  <span
+                    className={`chip ${
+                      finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "bad" : "warn"
+                    }`}
+                  >
+                    {finding.severity === "CRITICAL" || finding.severity === "HIGH"
+                      ? "Cao"
+                      : "Trung bình"}
+                  </span>
+                </summary>
+                <div className="body">
+                  <div>{finding.description}</div>
+                  <div className="url-evidence">
+                    <b>Bằng chứng thực tế:</b>
+                    <div style={{ marginTop: 4, fontFamily: "monospace" }}>
+                      {typeof finding.evidence === "string"
+                        ? finding.evidence
+                        : JSON.stringify(finding.evidence)}
+                    </div>
+                  </div>
+                  <div className="fix">
+                    <b>Hướng cải thiện:</b>
+                    <div style={{ marginTop: 4 }}>
+                      {finding.recommendation || "Tiếp tục duy trì cấu hình hiện tại."}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    <button
+                      type="button"
+                      className="button button-small"
+                      onClick={() => {
+                        setSelectedRuleId(finding.ruleId);
+                        setActiveTab("issues");
+                        setIsUrlModalOpen(false);
+                      }}
+                    >
+                      Mở vấn đề tổng thể & xác minh →
+                    </button>
+                  </div>
+                </div>
+              </details>
+            ))}
+          </>
+        ) : (
+          <div className="alert-box alert-green">
+            <span className="alert-icon">✓</span>
+            <div>
+              Chưa phát hiện tín hiệu bất thường trong phạm vi 10 nhóm kiểm tra kỹ thuật của URL này.
+            </div>
+          </div>
+        )}
+
+        <div className="alert-box alert-amber" style={{ marginTop: 14 }}>
+          <span className="alert-icon">⚠</span>
+          <div>
+            Không xác minh tự động chỉ bằng việc mở popup. Cần kiểm tra bằng chứng trên trang trước khi đưa lỗi vào đề xuất.
+          </div>
+        </div>
+
+        <div className="modal-actions">
+          <Button variant="quiet" onClick={() => setIsUrlModalOpen(false)}>
+            Đóng
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setIsUrlModalOpen(false);
+              setActiveTab("issues");
+            }}
+          >
+            Đến danh sách vấn đề →
+          </Button>
+        </div>
+      </Dialog>
+
+      {/* Modal 2: Target Business / Custom URL Dialog */}
+      <Dialog
+        id="target-select-dialog"
+        open={isTargetDialogOpen}
+        onClose={() => setIsTargetDialogOpen(false)}
+        title="Chọn doanh nghiệp / URL để kiểm tra"
+        description="Chọn từ danh sách khách hàng tiềm năng hoặc nhập URL website độc lập."
+      >
+        <form onSubmit={handleApplyTargetDialog} className="biz-form">
+          <div className="form-field">
+            <label htmlFor="modal-biz-select" className="form-label">
+              Chọn doanh nghiệp có sẵn
+            </label>
+            <select
+              id="modal-biz-select"
+              className="form-select"
+              value={selectedBizId}
+              onChange={(e) => {
+                const bId = e.target.value;
+                setSelectedBizId(bId);
+                if (bId !== "custom") {
+                  const found = initialBusinesses.find((b) => b.id === bId);
+                  if (found) {
+                    setModalUrlInput(found.websiteUrl);
+                  }
+                }
+              }}
+            >
+              {initialBusinesses.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name} ({b.normalizedDomain})
+                </option>
+              ))}
+              <option value="custom">── Nhập URL website khác ──</option>
+            </select>
+          </div>
+
+          <div className="form-field">
+            <label htmlFor="modal-url-input" className="form-label">
+              Địa chỉ URL website <span className="req">*</span>
+            </label>
+            <input
+              id="modal-url-input"
+              type="url"
+              className="form-input"
+              value={modalUrlInput}
+              onChange={(e) => {
+                setModalUrlInput(e.target.value);
+                setSelectedBizId("custom");
+              }}
+              placeholder="https://example.com"
+              required
+            />
+            <p className="field-hint">Chỉ chấp nhận giao thức http:// hoặc https:// hợp lệ.</p>
+          </div>
+
+          <div className="modal-actions">
+            <Button variant="quiet" onClick={() => setIsTargetDialogOpen(false)}>
+              Hủy
+            </Button>
+            <Button type="submit" variant="primary" disabled={!modalUrlInput.trim()}>
+              Bắt đầu quét ngay
+            </Button>
+          </div>
+        </form>
+      </Dialog>
     </>
   );
 }

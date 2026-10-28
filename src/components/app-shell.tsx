@@ -31,7 +31,7 @@ function MobileNavigation({ pathname }: { pathname: string }) {
     <Button className="mobile-menu" aria-label="Mở menu điều hướng" aria-expanded={open} aria-controls="mobile-navigation" onClick={() => setOpen(true)}><span aria-hidden="true">☰</span></Button>
     <Dialog id="mobile-navigation" className="mobile-drawer" open={open} onClose={() => setOpen(false)} title={<Logo />}>
       <Navigation pathname={pathname} onNavigate={() => setOpen(false)} />
-      <p className="hint">Giao diện nền tảng · Phase 01</p>
+      <p className="hint">LEADLIFT · Hệ thống tìm kiếm doanh nghiệp & phân tích website</p>
     </Dialog>
   </>;
 }
@@ -42,15 +42,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   return <ToastProvider>
     <a className="skip-link button button-primary" href="#main-content">Đến nội dung chính</a>
     <div className="shell">
-      <aside className="sidebar" aria-label="Thanh bên"><Link href="/" aria-label="LeadLift — Tổng quan"><Logo /></Link><Navigation pathname={pathname} /><div className="side-bottom"><b>LEADLIFT / PHASE 01</b>Giao diện nền tảng. Các chức năng nghiệp vụ sẽ được phát triển ở giai đoạn tiếp theo.</div></aside>
+      <aside className="sidebar" aria-label="Thanh bên"><Link href="/" aria-label="LeadLift — Tổng quan"><Logo /></Link><Navigation pathname={pathname} /><div className="side-bottom"><b>LEADLIFT / HỆ THỐNG</b>Hệ thống tìm kiếm doanh nghiệp tiềm năng, phân tích website và hỗ trợ tiếp cận hợp tác.</div></aside>
       <div className="workspace">
         <header className="topbar">
           <MobileNavigation key={pathname} pathname={pathname} />
           <nav className="breadcrumb" aria-label="Đường dẫn"><ol><li><Link href="/">Không gian làm việc</Link></li><li aria-hidden="true">/</li><li aria-current="page"><strong>{current}</strong></li></ol></nav>
-          <div className="topbar-right"><Badge tone="green">GIAO DIỆN NỀN TẢNG · PHASE 01</Badge><span className="brand-avatar" aria-hidden="true">L</span></div>
+          <div className="topbar-right"><Badge tone="green">BẢN THIẾT KẾ · V2</Badge><span className="brand-avatar" aria-hidden="true">L</span></div>
         </header>
         <main id="main-content" tabIndex={-1}>{children}</main>
-        <footer className="page-footer">LEADLIFT · Giao diện nền tảng · Chưa kết nối dữ liệu nghiệp vụ</footer>
+        <footer className="page-footer">LEADLIFT • Hệ thống tìm kiếm doanh nghiệp & phân tích website có bằng chứng</footer>
       </div>
     </div>
   </ToastProvider>;
