@@ -108,7 +108,14 @@ h1, h2, h3, p { margin-top: 0; }
 .empty-state p { max-width: 480px; margin: 0 auto; font-size: 13px; }
 .empty-state .actions { justify-content: center; margin-top: 20px; }
 .notice { background: #fff7e8; color: #885a1b; border: 1px solid #f1dfbd; padding: 11px 14px; border-radius: 10px; font-size: 12px; margin-bottom: 16px; }
-.banner { padding: 19px 23px; margin-bottom: 16px; }
+.banner {
+  border: 1px solid var(--edge);
+  background: linear-gradient(90deg, #fff 0%, #fff 48%, #ffffffcd 72%, #ffffff5e 100%), url('/banner-audit-v2.png') right center/auto 155% no-repeat;
+  border-radius: 13px;
+  padding: 19px 23px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
 .banner h2 { font-size: 22px; font-weight: 750; margin: 1px 0 4px; letter-spacing: -.5px; }
 .banner p { margin: 0; color: var(--text-secondary); }
 .kicker { font-size: 10px; letter-spacing: 1.4px; color: #008263; font-weight: 900; }

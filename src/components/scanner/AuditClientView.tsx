@@ -449,6 +449,25 @@ export function AuditClientView({ initialBusinesses }: AuditClientViewProps) {
                   <div className="divider" />
 
                   <div className="sub" style={{ marginBottom: 6 }}>
+                    URL điển hình được kiểm tra:
+                  </div>
+                  <div
+                    className="kv"
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "6px 0",
+                      borderBottom: "1px solid #edf1ed",
+                      fontSize: 12,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <span className="linkish">{targetUrl}</span>
+                    <span className="chip blue">Kiểm tra HTML & Headers</span>
+                  </div>
+
+                  <div className="sub" style={{ marginBottom: 6 }}>
                     Dữ liệu bằng chứng kỹ thuật:
                   </div>
                   <div className="evidence-snippet">
