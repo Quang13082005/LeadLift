@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/primitives";
 import { normalizeDomain } from "@/lib/domain-normalizer";
@@ -24,10 +24,12 @@ function EditBusinessForm({
   business,
   onClose,
   onSuccess,
+  onBusyChange,
 }: {
   business: BusinessItem;
   onClose: () => void;
   onSuccess: (updated: BusinessItem) => void;
+  onBusyChange: (busy: boolean) => void;
 }) {
   const notify = useToast();
   const [loading, setLoading] = useState(false);
@@ -65,6 +67,7 @@ function EditBusinessForm({
     }
 
     setLoading(true);
+    onBusyChange(true);
     try {
       const res = await updateBusinessAction(formData);
       if (res.success && res.data) {
@@ -78,6 +81,7 @@ function EditBusinessForm({
       setError("Đã xảy ra lỗi không mong muốn khi cập nhật dữ liệu.");
     } finally {
       setLoading(false);
+      onBusyChange(false);
     }
   };
 
@@ -248,12 +252,13 @@ function EditBusinessForm({
 }
 
 export function EditBusinessDialog({ business, open, onClose, onSuccess }: EditBusinessDialogProps) {
+  const busy = useRef(false);
   if (!business) return null;
 
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={() => { if (!busy.current) onClose(); }}
       title="✏ Chỉnh sửa hồ sơ doanh nghiệp"
       description={`Cập nhật thông tin chi tiết cho mã hồ sơ: ${business.id}`}
     >
@@ -262,6 +267,7 @@ export function EditBusinessDialog({ business, open, onClose, onSuccess }: EditB
         business={business}
         onClose={onClose}
         onSuccess={onSuccess}
+        onBusyChange={(value) => { busy.current = value; }}
       />
     </Dialog>
   );

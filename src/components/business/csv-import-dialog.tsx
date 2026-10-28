@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/primitives";
 import { validateCsvAction, importCsvAction } from "@/app/actions/business";
@@ -16,6 +16,8 @@ interface CsvImportDialogProps {
 export function CsvImportDialog({ open, onClose, onSuccess }: CsvImportDialogProps) {
   const notify = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const validationId = useRef(0);
+  useEffect(() => () => { validationId.current++; }, []);
 
   const [fileName, setFileName] = useState<string>("");
   const [validating, setValidating] = useState<boolean>(false);
@@ -24,6 +26,7 @@ export function CsvImportDialog({ open, onClose, onSuccess }: CsvImportDialogPro
   const [error, setError] = useState<string | null>(null);
 
   const resetState = () => {
+    validationId.current++;
     setFileName("");
     setValidating(false);
     setImporting(false);
@@ -34,11 +37,17 @@ export function CsvImportDialog({ open, onClose, onSuccess }: CsvImportDialogPro
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (importing) return;
+    const request = ++validationId.current;
+    setValidationResult(null);
+    setValidating(false);
+    setError(null);
+    setFileName("");
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.endsWith(".csv")) {
+    if (!file.name.toLowerCase().endsWith(".csv")) {
       setError("Vui lòng chọn tệp có định dạng .csv");
       return;
     }
@@ -51,36 +60,26 @@ export function CsvImportDialog({ open, onClose, onSuccess }: CsvImportDialogPro
     setError(null);
     setFileName(file.name);
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const content = event.target?.result as string;
-      await triggerValidation(content);
-    };
-    reader.onerror = () => {
-      setError("Không thể đọc nội dung tệp tin đã chọn.");
-    };
-    reader.readAsText(file, "UTF-8");
-  };
-
-  const triggerValidation = async (content: string) => {
     setValidating(true);
-    setError(null);
     try {
+      const content = await file.text();
+      if (request !== validationId.current) return;
       const res = await validateCsvAction(content);
+      if (request !== validationId.current) return;
       if (res.success && res.result) {
         setValidationResult(res.result);
       } else {
         setError(res.error || "Không thể xác thực tệp CSV.");
       }
     } catch {
-      setError("Đã xảy ra lỗi khi xác thực tệp CSV.");
+      if (request === validationId.current) setError("Không thể đọc hoặc xác thực tệp CSV.");
     } finally {
-      setValidating(false);
+      if (request === validationId.current) setValidating(false);
     }
   };
 
   const handleConfirmImport = async () => {
-    if (!validationResult || validationResult.validRows.length === 0) return;
+    if (importing || validating || error || !validationResult || validationResult.validRows.length === 0) return;
 
     setImporting(true);
     setError(null);
@@ -88,7 +87,7 @@ export function CsvImportDialog({ open, onClose, onSuccess }: CsvImportDialogPro
       const res = await importCsvAction(validationResult.validRows);
       if (res.success) {
         const count = res.importedCount || 0;
-        notify(`✓ Đã nhập thành công ${count} doanh nghiệp vào hệ thống.`);
+        notify(`✓ Đã nhập ${count} doanh nghiệp; bỏ qua ${res.skippedCount || 0} dòng trùng. Không ghi đè hồ sơ.`);
         onSuccess(count);
         onClose();
         resetState();
@@ -103,9 +102,7 @@ export function CsvImportDialog({ open, onClose, onSuccess }: CsvImportDialogPro
   };
 
   const sampleCsvTemplate = `Tên doanh nghiệp,Website,Ngành nghề,Khu vực,Số điện thoại,Email
-Cửa hàng Thuê xe máy Sơn Trà,https://thuexemaysontra.vn,Cho thuê xe máy,Đà Nẵng,0905111222,info@thuexemaysontra.vn
-Khách sạn Biển Xanh Đà Nẵng,khachsangoldenbeach.com,Khách sạn,Sơn Trà,02363888999,booking@goldendn.com
-Nhà hàng Hải sản Mỹ Hạnh,myhanhseafood.vn,Nhà hàng,Ngũ Hành Sơn,0912333444,contact@myhanh.vn`;
+Doanh nghiệp mẫu - thay trước khi nhập,https://doanh-nghiep.example,Dịch vụ địa phương,Đà Nẵng,,`;
 
   const downloadSampleTemplate = () => {
     const blob = new Blob(["\uFEFF" + sampleCsvTemplate], { type: "text/csv;charset=utf-8;" });
@@ -121,6 +118,7 @@ Nhà hàng Hải sản Mỹ Hạnh,myhanhseafood.vn,Nhà hàng,Ngũ Hành Sơn,0
     <Dialog
       open={open}
       onClose={() => {
+        if (importing) return;
         onClose();
         resetState();
       }}
@@ -145,6 +143,7 @@ Nhà hàng Hải sản Mỹ Hạnh,myhanhseafood.vn,Nhà hàng,Ngũ Hành Sơn,0
             onChange={handleFileChange}
             id="csv-file-input"
             className="sr-only"
+            disabled={importing}
           />
           <label htmlFor="csv-file-input" className="csv-dropzone">
             <span className="csv-upload-icon" aria-hidden="true">
@@ -154,7 +153,7 @@ Nhà hàng Hải sản Mỹ Hạnh,myhanhseafood.vn,Nhà hàng,Ngũ Hành Sơn,0
               <strong>{fileName ? fileName : "Bấm để chọn tệp CSV từ máy tính"}</strong>
               <p>Hỗ trợ tệp .CSV chuẩn UTF-8, tối đa 2MB và không quá 200 dòng.</p>
             </div>
-            <Button variant="secondary" small onClick={() => fileInputRef.current?.click()}>
+            <Button variant="secondary" small disabled={importing} onClick={(event) => { event.preventDefault(); fileInputRef.current?.click(); }}>
               {fileName ? "Chọn tệp khác" : "Chọn tệp CSV"}
             </Button>
           </label>
@@ -250,12 +249,12 @@ Nhà hàng Hải sản Mỹ Hạnh,myhanhseafood.vn,Nhà hàng,Ngũ Hành Sơn,0
         )}
 
         <div className="modal-actions">
-          <Button variant="secondary" onClick={onClose} disabled={importing}>
+          <Button variant="secondary" onClick={() => { onClose(); resetState(); }} disabled={importing}>
             Đóng
           </Button>
           <Button
             variant="primary"
-            disabled={!validationResult || validationResult.validCount === 0 || importing || validating}
+            disabled={!!error || !validationResult || validationResult.validCount === 0 || importing || validating}
             onClick={handleConfirmImport}
           >
             {importing

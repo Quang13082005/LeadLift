@@ -1,8 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { normalizeDomain } from "@/lib/domain-normalizer";
+import { BusinessError } from "@/lib/business-error";
+import { validateImportRows } from "@/lib/csv-parser";
+import type { Business, Prisma } from "@/generated/prisma/client";
 import {
   createBusinessSchema,
   updateBusinessSchema,
+  businessQuerySchema,
   type BusinessItem,
   type BusinessQueryOptions,
   type BusinessQueryResult,
@@ -16,25 +20,15 @@ import {
  * access when running in production until formal Authentication is integrated.
  */
 export function enforceDevOnly(): void {
-  // Allow during build compilation
-  if (process.env.npm_lifecycle_event === "build" || process.env.NEXT_PHASE === "phase-production-build") {
-    return;
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    const error = new Error(
-      "TRUY CẬP BỊ TỪ CHỐI: Các API nghiệp vụ nội bộ chưa có Authentication hoàn chỉnh chỉ được phép hoạt động trong môi trường phát triển (NODE_ENV !== 'production'). Cơ chế bảo mật fail-closed đã chặn yêu cầu này."
-    );
-    (error as unknown as { statusCode: number }).statusCode = 403;
-    throw error;
+  if (process.env.NODE_ENV !== "development") {
+    throw new BusinessError("Truy cập bị từ chối (fail-closed). Chức năng doanh nghiệp chỉ khả dụng trong môi trường development local cho đến khi tích hợp Authentication.", 403);
   }
 }
 
 /**
  * Serializes a Prisma Business record into a clean, JSON-safe BusinessItem.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function serializeBusiness(b: any): BusinessItem {
+function serializeBusiness(b: Business): BusinessItem {
   return {
     id: b.id,
     name: b.name,
@@ -63,41 +57,39 @@ function serializeBusiness(b: any): BusinessItem {
 export async function getBusinesses(options: BusinessQueryOptions = {}): Promise<BusinessQueryResult> {
   enforceDevOnly();
 
-  const page = Math.max(1, options.page || 1);
-  const limit = Math.min(50, Math.max(1, options.limit || 10));
+  const query = businessQuerySchema.parse(options);
+  const { page, limit } = query;
   const skip = (page - 1) * limit;
 
-  // Build Prisma where filter
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const where: any = {};
+  const where: Prisma.BusinessWhereInput = {};
+  const conditions: Prisma.BusinessWhereInput[] = [];
 
-  if (options.search && options.search.trim().length > 0) {
-    const term = options.search.trim();
-    where.OR = [
+  if (query.search) {
+    const term = query.search;
+    conditions.push({ OR: [
       { name: { contains: term, mode: "insensitive" } },
       { normalizedDomain: { contains: term, mode: "insensitive" } },
-    ];
+    ] });
   }
 
-  if (options.area && options.area !== "Tất cả") {
-    where.OR = where.OR
-      ? [{ AND: [where, { OR: [{ city: options.area }, { district: options.area }] }] }]
-      : [{ city: options.area }, { district: options.area }];
+  if (query.area && query.area !== "Tất cả") {
+    conditions.push({ OR: [{ city: query.area }, { district: query.area }] });
   }
 
-  if (options.sector && options.sector !== "Tất cả") {
-    where.industry = options.sector;
+  if (query.sector && query.sector !== "Tất cả") {
+    where.industry = query.sector;
   }
 
-  if (options.status && options.status !== "Tất cả") {
-    where.leadStatus = options.status;
+  if (query.status && query.status !== "Tất cả") {
+    where.leadStatus = query.status;
   }
+  if (conditions.length) where.AND = conditions;
 
   try {
     const [items, total, totalCount, prioritizeAuditCount, outreachSentCount, inDiscussionCount] = await Promise.all([
       prisma.business.findMany({
         where,
-        orderBy: [{ opportunityScore: "desc" }, { createdAt: "desc" }],
+        orderBy: [{ opportunityScore: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }, { id: "asc" }],
         skip,
         take: limit,
       }),
@@ -111,7 +103,7 @@ export async function getBusinesses(options: BusinessQueryOptions = {}): Promise
       prisma.business.count({ where: { leadStatus: "OUTREACH_SENT" } }),
       prisma.business.count({
         where: {
-          leadStatus: { in: ["IN_DISCUSSION", "CONVERTED", "QUALIFIED"] },
+          leadStatus: { in: ["IN_DISCUSSION", "CONVERTED"] },
         },
       }),
     ]);
@@ -129,22 +121,8 @@ export async function getBusinesses(options: BusinessQueryOptions = {}): Promise
         inDiscussionCount,
       },
     };
-  } catch (err) {
-    // If database is temporarily empty or unreachable, return empty fallback
-    console.error("Error querying businesses:", err);
-    return {
-      items: [],
-      total: 0,
-      page: 1,
-      limit,
-      totalPages: 1,
-      stats: {
-        totalCount: 0,
-        prioritizeAuditCount: 0,
-        outreachSentCount: 0,
-        inDiscussionCount: 0,
-      },
-    };
+  } catch {
+    throw new BusinessError("Không thể tải danh sách doanh nghiệp. Vui lòng thử lại.", 503);
   }
 }
 
@@ -153,6 +131,7 @@ export async function getBusinesses(options: BusinessQueryOptions = {}): Promise
  */
 export async function getBusinessById(id: string): Promise<BusinessItem | null> {
   enforceDevOnly();
+  updateBusinessSchema.pick({ id: true }).parse({ id });
 
   const business = await prisma.business.findUnique({
     where: { id },
@@ -181,8 +160,9 @@ export async function createBusiness(input: CreateBusinessInput): Promise<Busine
   });
 
   if (existing) {
-    throw new Error(
+    throw new BusinessError(
       `Tên miền '${normalizedDomain}' đã tồn tại trong hệ thống (Doanh nghiệp: "${existing.name}"). Hệ thống từ chối tạo trùng lặp.`
+      , 409
     );
   }
 
@@ -223,7 +203,7 @@ export async function updateBusiness(input: UpdateBusinessInput): Promise<Busine
   });
 
   if (!existing) {
-    throw new Error(`Không tìm thấy doanh nghiệp có ID '${validated.id}'`);
+    throw new BusinessError("Không tìm thấy doanh nghiệp cần cập nhật.", 404);
   }
 
   let normalizedDomain = existing.normalizedDomain;
@@ -240,8 +220,9 @@ export async function updateBusiness(input: UpdateBusinessInput): Promise<Busine
         where: { normalizedDomain },
       });
       if (duplicate && duplicate.id !== existing.id) {
-        throw new Error(
+        throw new BusinessError(
           `Tên miền '${normalizedDomain}' đã được sử dụng bởi doanh nghiệp "${duplicate.name}".`
+          , 409
         );
       }
     }
@@ -284,6 +265,7 @@ export async function checkDuplicateDomains(
 ): Promise<Array<{ domain: string; businessName: string }>> {
   enforceDevOnly();
 
+  if (!Array.isArray(domains) || domains.length > 200 || domains.some((domain) => typeof domain !== "string" || !normalizeDomain(domain))) throw new BusinessError("Danh sách tên miền không hợp lệ.");
   if (!domains.length) return [];
 
   const matches = await prisma.business.findMany({
@@ -311,6 +293,7 @@ export async function importBusinessesBatch(rows: ValidatedCsvRow[]): Promise<{
   skippedDetails: Array<{ rowNumber: number; domain: string; reason: string }>;
 }> {
   enforceDevOnly();
+  rows = validateImportRows(rows);
 
   if (!rows.length) {
     return { importedCount: 0, skippedCount: 0, skippedDetails: [] };
@@ -339,27 +322,29 @@ export async function importBusinessesBatch(rows: ValidatedCsvRow[]): Promise<{
     }
   }
 
-  let importedCount = 0;
-  for (const row of rowsToInsert) {
-    await prisma.business.create({
-      data: {
+  // One atomic SQL insert: unique constraint arbitrates concurrent duplicates.
+  const created = rowsToInsert.length ? await prisma.business.createManyAndReturn({
+    skipDuplicates: true,
+    select: { normalizedDomain: true },
+    data: rowsToInsert.map((row) => ({
         name: row.name,
         websiteUrl: row.websiteUrl,
         normalizedDomain: row.normalizedDomain,
         industry: row.industry,
         city: row.city,
         district: row.district,
+        address: row.address,
         phone: row.phone,
         email: row.email,
         dataSource: "CSV_IMPORT",
         notes: row.notes,
-      },
-    });
-    importedCount++;
-  }
+    })),
+  }) : [];
+  const insertedDomains = new Set(created.map((record) => record.normalizedDomain));
+  for (const row of rowsToInsert) if (!insertedDomains.has(row.normalizedDomain)) skippedDetails.push({ rowNumber: row.rowNumber, domain: row.normalizedDomain, reason: "Tên miền đã được thêm bởi yêu cầu khác; không ghi đè." });
 
   return {
-    importedCount,
+    importedCount: created.length,
     skippedCount: skippedDetails.length,
     skippedDetails,
   };

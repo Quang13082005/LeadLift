@@ -8,7 +8,9 @@ import {
   updateBusiness,
   checkDuplicateDomains,
   importBusinessesBatch,
+  enforceDevOnly,
 } from "@/lib/services/business-service";
+import { publicBusinessError } from "@/lib/business-error";
 import { parseAndValidateCsv } from "@/lib/csv-parser";
 import type {
   BusinessQueryOptions,
@@ -22,43 +24,48 @@ import type {
 export async function fetchBusinessesAction(
   options: BusinessQueryOptions = {}
 ): Promise<BusinessQueryResult> {
+  enforceDevOnly();
   return await getBusinesses(options);
 }
 
 export async function fetchBusinessByIdAction(id: string) {
+  enforceDevOnly();
   return await getBusinessById(id);
 }
 
 export async function createBusinessAction(
   input: CreateBusinessInput
-): Promise<{ success: boolean; data?: unknown; error?: string }> {
+): Promise<{ success: boolean; data?: unknown; error?: string; code?: number }> {
   try {
+    enforceDevOnly();
     const created = await createBusiness(input);
     revalidatePath("/businesses");
     return { success: true, data: created };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Không thể tạo hồ sơ doanh nghiệp.";
-    return { success: false, error: message };
+    const { message, status } = publicBusinessError(err);
+    return { success: false, error: message, code: status };
   }
 }
 
 export async function updateBusinessAction(
   input: UpdateBusinessInput
-): Promise<{ success: boolean; data?: unknown; error?: string }> {
+): Promise<{ success: boolean; data?: unknown; error?: string; code?: number }> {
   try {
+    enforceDevOnly();
     const updated = await updateBusiness(input);
     revalidatePath("/businesses");
     return { success: true, data: updated };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Không thể cập nhật hồ sơ doanh nghiệp.";
-    return { success: false, error: message };
+    const { message, status } = publicBusinessError(err);
+    return { success: false, error: message, code: status };
   }
 }
 
 export async function validateCsvAction(
   csvContent: string
-): Promise<{ success: boolean; result?: CsvValidationResult; error?: string }> {
+): Promise<{ success: boolean; result?: CsvValidationResult; error?: string; code?: number }> {
   try {
+    enforceDevOnly();
     const initialResult = parseAndValidateCsv(csvContent);
 
     if (initialResult.errors.length > 0 && initialResult.validRows.length === 0) {
@@ -92,14 +99,14 @@ export async function validateCsvAction(
       result: {
         totalRows: initialResult.totalRows,
         validCount: finalValidRows.length,
-        invalidCount: combinedErrors.length,
+        invalidCount: new Set(combinedErrors.map((error) => error.rowNumber)).size,
         validRows: finalValidRows,
         errors: combinedErrors.sort((a, b) => a.rowNumber - b.rowNumber),
       },
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Lỗi xử lý tệp CSV.";
-    return { success: false, error: message };
+    const { message, status } = publicBusinessError(err);
+    return { success: false, error: message, code: status };
   }
 }
 
@@ -111,8 +118,10 @@ export async function importCsvAction(
   skippedCount?: number;
   skippedDetails?: Array<{ rowNumber: number; domain: string; reason: string }>;
   error?: string;
+  code?: number;
 }> {
   try {
+    enforceDevOnly();
     const result = await importBusinessesBatch(rows);
     revalidatePath("/businesses");
     return {
@@ -122,7 +131,7 @@ export async function importCsvAction(
       skippedDetails: result.skippedDetails,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Lỗi khi nhập danh sách doanh nghiệp vào cơ sở dữ liệu.";
-    return { success: false, error: message };
+    const { message, status } = publicBusinessError(err);
+    return { success: false, error: message, code: status };
   }
 }

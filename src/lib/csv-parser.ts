@@ -1,279 +1,115 @@
+import { z } from "zod";
 import { normalizeDomain } from "@/lib/domain-normalizer";
-import type { CsvRowError, CsvValidationResult, ValidatedCsvRow } from "@/types/business";
+import { BusinessError } from "@/lib/business-error";
+import { createBusinessSchema, type CsvRowError, type CsvValidationResult, type ValidatedCsvRow } from "@/types/business";
 
-export const MAX_CSV_SIZE_BYTES = 2 * 1024 * 1024; // 2MB
+export const MAX_CSV_SIZE_BYTES = 2 * 1024 * 1024;
 export const MAX_CSV_ROWS = 200;
 
-/**
- * Standard RFC 4180 CSV line parser supporting quoted fields with commas and escaped quotes.
- */
+type CsvRecord = { cells: string[]; line: number };
+
+/** RFC 4180 records, including quoted newlines; reject malformed quoting. */
+function parseRecords(content: string, delimiter = ","): CsvRecord[] {
+  const records: CsvRecord[] = [];
+  let cells: string[] = [];
+  let field = "";
+  let state: "start" | "plain" | "quoted" | "closed" = "start";
+  let line = 1;
+  let recordLine = 1;
+  const endField = () => { cells.push(field.trim()); field = ""; state = "start"; };
+  const endRecord = () => {
+    endField();
+    if (cells.some(Boolean)) records.push({ cells, line: recordLine });
+    cells = [];
+    if (records.length > MAX_CSV_ROWS + 1) throw new Error(`Số dòng vượt quá giới hạn tối đa ${MAX_CSV_ROWS} dòng.`);
+  };
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i];
+    if (state === "quoted") {
+      if (char === '"') {
+        if (content[i + 1] === '"') { field += '"'; i++; }
+        else state = "closed";
+      } else if (char === "\r" || char === "\n") {
+        if (char === "\r" && content[i + 1] === "\n") i++;
+        field += "\n";
+        line++;
+      } else field += char;
+    } else if (char === delimiter) endField();
+    else if (char === "\r" || char === "\n") {
+      endRecord();
+      if (char === "\r" && content[i + 1] === "\n") i++;
+      line++;
+      recordLine = line;
+    } else if (char === '"' && state === "start") state = "quoted";
+    else if (char === '"' || (state === "closed" && char.trim())) throw new Error(`Dấu ngoặc kép không hợp lệ tại dòng ${line}.`);
+    else if (state !== "closed") { field += char; state = "plain"; }
+  }
+  if (state === "quoted") throw new Error(`Thiếu dấu ngoặc kép đóng tại dòng ${recordLine}.`);
+  if (field || cells.length || state !== "start") endRecord();
+  return records;
+}
+
 export function parseCsvLine(line: string, delimiter = ","): string[] {
-  const result: string[] = [];
-  let current = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    const nextChar = line[i + 1];
-
-    if (char === '"') {
-      if (inQuotes && nextChar === '"') {
-        current += '"';
-        i++; // skip escaped quote
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (char === delimiter && !inQuotes) {
-      result.push(current.trim());
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-
-  result.push(current.trim());
-  return result;
+  return parseRecords(line, delimiter)[0]?.cells ?? [];
 }
 
-/**
- * Normalizes header string to standard column identifier.
- */
 function mapHeaderToKey(header: string): string | null {
-  const h = header.toLowerCase().replace(/[\s_\-\/]+/g, "");
-  if (h.includes("têndoanhnghiệp") || h.includes("têncty") || h.includes("tên") || h.includes("businessname") || h.includes("company") || h.includes("name")) {
-    return "name";
-  }
-  if (h.includes("website") || h.includes("url") || h.includes("trangweb") || h.includes("domain") || h.includes("web")) {
-    return "websiteUrl";
-  }
-  if (h.includes("ngànhnghề") || h.includes("ngành") || h.includes("lĩnhvực") || h.includes("industry") || h.includes("category")) {
-    return "industry";
-  }
-  if (h.includes("khuvực") || h.includes("thànhphố") || h.includes("tỉnhthành") || h.includes("city") || h.includes("location") || h.includes("địachỉ") || h.includes("address")) {
-    return "city";
-  }
-  if (h.includes("quận") || h.includes("huyện") || h.includes("district")) {
-    return "district";
-  }
-  if (h.includes("sốđiệnthoại") || h.includes("điệnthoại") || h.includes("sđt") || h.includes("phone") || h.includes("hotline") || h.includes("tel")) {
-    return "phone";
-  }
-  if (h.includes("email") || h.includes("thưđiệntử") || h.includes("mail")) {
-    return "email";
-  }
-  if (h.includes("ghichú") || h.includes("notes") || h.includes("note") || h.includes("môtả")) {
-    return "notes";
-  }
-  return null;
+  const key = header.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/đ/g, "d").replace(/[\s_\-/]+/g, "");
+  const aliases: Record<string, string[]> = {
+    name: ["name", "businessname", "company", "companyname", "ten", "tendoanhnghiep", "tencty"],
+    websiteUrl: ["website", "websiteurl", "url", "trangweb", "domain", "domainname", "web"],
+    industry: ["industry", "category", "nganhnghe", "nganh", "linhvuc"],
+    city: ["city", "location", "khuvuc", "thanhpho", "tinhthanh"],
+    address: ["address", "diachi"],
+    district: ["district", "quan", "huyen"],
+    phone: ["phone", "hotline", "tel", "sodienthoai", "dienthoai", "sdt"],
+    email: ["email", "mail", "thudientu"],
+    notes: ["notes", "note", "ghichu", "mota"],
+  };
+  return Object.keys(aliases).find((field) => aliases[field].includes(key)) ?? null;
 }
 
-/**
- * Parses and validates raw CSV content against business rules.
- */
+const importRowSchema = createBusinessSchema.extend({ rowNumber: z.number().int().min(2).max(1000000) });
+
+/** Preview data is untrusted on confirmation: revalidate and derive domain again. */
+export function validateImportRows(input: unknown): ValidatedCsvRow[] {
+  if (!Array.isArray(input) || input.length > MAX_CSV_ROWS) throw new BusinessError(`Chỉ được nhập tối đa ${MAX_CSV_ROWS} dòng.`);
+  let serialized: string;
+  try { serialized = JSON.stringify(input); } catch { throw new BusinessError("Dữ liệu nhập không hợp lệ."); }
+  if (new TextEncoder().encode(serialized).length > MAX_CSV_SIZE_BYTES) throw new BusinessError("Dữ liệu nhập vượt quá giới hạn 2MB.", 413);
+  return z.array(importRowSchema).parse(input).map((row) => ({ ...row, normalizedDomain: normalizeDomain(row.websiteUrl), dataSource: "CSV_IMPORT" }));
+}
+
 export function parseAndValidateCsv(csvContent: string): CsvValidationResult {
-  if (!csvContent || typeof csvContent !== "string") {
-    return {
-      totalRows: 0,
-      validCount: 0,
-      invalidCount: 1,
-      validRows: [],
-      errors: [{ rowNumber: 0, field: "file", message: "Nội dung tệp CSV rỗng hoặc không hợp lệ" }],
-    };
-  }
-
-  // Check file size (rough byte estimation from string length)
-  const byteSize = new TextEncoder().encode(csvContent).length;
-  if (byteSize > MAX_CSV_SIZE_BYTES) {
-    return {
-      totalRows: 0,
-      validCount: 0,
-      invalidCount: 1,
-      validRows: [],
-      errors: [
-        {
-          rowNumber: 0,
-          field: "file",
-          message: `Kích thước tệp (${(byteSize / 1024 / 1024).toFixed(1)}MB) vượt quá giới hạn tối đa cho phép là 2MB.`,
-        },
-      ],
-    };
-  }
-
-  // Strip BOM if present
-  let cleanContent = csvContent;
-  if (cleanContent.charCodeAt(0) === 0xfeff) {
-    cleanContent = cleanContent.slice(1);
-  }
-
-  // Split lines while respecting CR, LF, and CRLF
-  const rawLines = cleanContent
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-
-  if (rawLines.length === 0) {
-    return {
-      totalRows: 0,
-      validCount: 0,
-      invalidCount: 1,
-      validRows: [],
-      errors: [{ rowNumber: 0, field: "file", message: "Tệp CSV không chứa bất kỳ dòng dữ liệu nào." }],
-    };
-  }
-
-  // Parse header line
-  const headerCells = parseCsvLine(rawLines[0]);
-  const columnMap: Record<number, string> = {};
-
-  headerCells.forEach((header, index) => {
-    const key = mapHeaderToKey(header);
-    if (key) {
-      columnMap[index] = key;
-    }
-  });
-
-  const hasName = Object.values(columnMap).includes("name");
-  const hasWebsite = Object.values(columnMap).includes("websiteUrl");
-
-  if (!hasName || !hasWebsite) {
-    return {
-      totalRows: rawLines.length - 1,
-      validCount: 0,
-      invalidCount: 1,
-      validRows: [],
-      errors: [
-        {
-          rowNumber: 1,
-          field: "header",
-          message: "Tiêu đề cột CSV phải chứa tối thiểu hai cột bắt buộc: 'Tên doanh nghiệp' và 'Website/URL'.",
-        },
-      ],
-    };
-  }
-
-  const dataLines = rawLines.slice(1);
-
-  if (dataLines.length > MAX_CSV_ROWS) {
-    return {
-      totalRows: dataLines.length,
-      validCount: 0,
-      invalidCount: dataLines.length,
-      validRows: [],
-      errors: [
-        {
-          rowNumber: 0,
-          field: "file",
-          message: `Số lượng dòng dữ liệu (${dataLines.length}) vượt quá giới hạn tối đa ${MAX_CSV_ROWS} dòng trong một lần nhập.`,
-        },
-      ],
-    };
-  }
-
+  const failure = (message: string, field = "file", rowNumber = 0): CsvValidationResult => ({ totalRows: 0, validCount: 0, invalidCount: 1, validRows: [], errors: [{ rowNumber, field, message }] });
+  if (typeof csvContent !== "string" || !csvContent.trim()) return failure("Nội dung tệp CSV rỗng hoặc không hợp lệ.");
+  if (new TextEncoder().encode(csvContent).length > MAX_CSV_SIZE_BYTES) return failure("Kích thước tệp vượt quá giới hạn tối đa 2MB.");
+  let records: CsvRecord[];
+  try { records = parseRecords(csvContent.replace(/^\uFEFF/, "")); }
+  catch (error) { return failure(error instanceof Error ? error.message : "Tệp CSV không hợp lệ."); }
+  if (!records.length) return failure("Tệp CSV không chứa dữ liệu.");
+  const keys = records[0].cells.map(mapHeaderToKey);
+  if (!keys.includes("name") || !keys.includes("websiteUrl")) return failure("Tiêu đề cột CSV phải chứa Tên doanh nghiệp và Website/URL.", "header", 1);
+  const knownKeys = keys.filter((key) => key !== null);
+  if (new Set(knownKeys).size !== knownKeys.length) return failure("Tiêu đề cột CSV bị trùng. Mỗi trường chỉ được khai báo một lần.", "header", 1);
+  const data = records.slice(1);
   const validRows: ValidatedCsvRow[] = [];
   const errors: CsvRowError[] = [];
-  const seenDomainsInFile = new Map<string, number>(); // domain -> rowNumber
-
-  dataLines.forEach((line, index) => {
-    const rowNumber = index + 2; // Line 1 is header, data starts at line 2
-    const cells = parseCsvLine(line);
-
-    // Skip empty lines that only contain commas
-    if (cells.every((c) => c === "")) {
-      return;
+  const seen = new Map<string, number>();
+  for (const { cells, line } of data) {
+    if (cells.length !== keys.length) { errors.push({ rowNumber: line, field: "row", message: "Số cột không khớp với tiêu đề." }); continue; }
+    const raw: Record<string, string | number> = { rowNumber: line, industry: "Dịch vụ địa phương", city: "Đà Nẵng", dataSource: "CSV_IMPORT" };
+    keys.forEach((key, index) => { if (key && cells[index]) raw[key] = cells[index]; });
+    const parsed = importRowSchema.safeParse(raw);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) errors.push({ rowNumber: line, field: issue.path.join("."), message: issue.message });
+      continue;
     }
-
-    const rowData: Record<string, string> = {};
-    cells.forEach((val, colIdx) => {
-      const key = columnMap[colIdx];
-      if (key) {
-        rowData[key] = val;
-      }
-    });
-
-    const name = rowData.name?.trim() || "";
-    const websiteUrl = rowData.websiteUrl?.trim() || "";
-    const industry = rowData.industry?.trim() || "Dịch vụ địa phương";
-    const city = rowData.city?.trim() || "Đà Nẵng";
-    const district = rowData.district?.trim() || undefined;
-    const phone = rowData.phone?.trim() || undefined;
-    const email = rowData.email?.trim() || undefined;
-    const notes = rowData.notes?.trim() || undefined;
-
-    let hasRowError = false;
-
-    // Validate Name
-    if (!name || name.length < 2) {
-      errors.push({
-        rowNumber,
-        field: "name",
-        message: "Tên doanh nghiệp không được để trống và phải có ít nhất 2 ký tự.",
-        rawValue: name,
-      });
-      hasRowError = true;
-    }
-
-    // Validate Website URL & Normalized Domain
-    const normalizedDomain = normalizeDomain(websiteUrl);
-    if (!websiteUrl || !normalizedDomain) {
-      errors.push({
-        rowNumber,
-        field: "websiteUrl",
-        message: "Địa chỉ website không hợp lệ hoặc không trích xuất được tên miền chuẩn.",
-        rawValue: websiteUrl,
-      });
-      hasRowError = true;
-    } else {
-      // Check duplicate domain inside the CSV file
-      if (seenDomainsInFile.has(normalizedDomain)) {
-        const previousRow = seenDomainsInFile.get(normalizedDomain);
-        errors.push({
-          rowNumber,
-          field: "normalizedDomain",
-          message: `Tên miền '${normalizedDomain}' bị trùng lặp với dòng ${previousRow} trong tệp CSV này.`,
-          rawValue: websiteUrl,
-        });
-        hasRowError = true;
-      } else {
-        seenDomainsInFile.set(normalizedDomain, rowNumber);
-      }
-    }
-
-    // Validate Email format if present
-    if (email) {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        errors.push({
-          rowNumber,
-          field: "email",
-          message: `Định dạng email '${email}' không hợp lệ.`,
-          rawValue: email,
-        });
-        hasRowError = true;
-      }
-    }
-
-    if (!hasRowError) {
-      validRows.push({
-        rowNumber,
-        name,
-        websiteUrl: websiteUrl.startsWith("http://") || websiteUrl.startsWith("https://") ? websiteUrl : `https://${websiteUrl}`,
-        normalizedDomain,
-        industry,
-        city,
-        district,
-        phone,
-        email,
-        dataSource: "CSV_IMPORT",
-        notes,
-      });
-    }
-  });
-
-  return {
-    totalRows: dataLines.length,
-    validCount: validRows.length,
-    invalidCount: errors.length,
-    validRows,
-    errors,
-  };
+    const normalizedDomain = normalizeDomain(parsed.data.websiteUrl);
+    const previous = seen.get(normalizedDomain);
+    if (previous) { errors.push({ rowNumber: line, field: "normalizedDomain", message: `Tên miền '${normalizedDomain}' bị trùng lặp với dòng ${previous} trong tệp CSV.` }); continue; }
+    seen.set(normalizedDomain, line);
+    validRows.push({ ...parsed.data, normalizedDomain, dataSource: "CSV_IMPORT" });
+  }
+  return { totalRows: data.length, validCount: validRows.length, invalidCount: new Set(errors.map((error) => error.rowNumber)).size, validRows, errors };
 }

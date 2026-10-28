@@ -83,7 +83,7 @@ export function CreateBusinessDialog({ open, onClose, onSuccess }: CreateBusines
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={() => { if (!loading) onClose(); }}
       title="＋ Thêm doanh nghiệp mới"
       description="Nhập thông tin doanh nghiệp để theo dõi, quản lý và chuẩn bị cho Website Audit."
     >

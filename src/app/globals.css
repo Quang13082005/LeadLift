@@ -288,4 +288,15 @@ h1, h2, h3, p { margin-top: 0; }
 .mini-table th, .mini-table td { padding: 8px 10px; font-size: 12px; }
 .domain-pill { background: #edf4ef; padding: 2px 6px; border-radius: 4px; color: var(--green); font-size: 11px; }
 .preview-more-hint { font-size: 11px; color: var(--text-secondary); font-style: italic; margin-top: 6px; }
+.business-module { min-width: 0; }
+.business-module .panel, .preview-wrap, .form-field { min-width: 0; }
+.website-link-wrap, .biz-title, .kv-notes, .err-raw, .csv-upload-text { overflow-wrap: anywhere; }
+.table-row-selectable:focus-visible { outline-offset: -3px; }
+@media (max-width: 650px) {
+  .form-grid, .kv-grid { grid-template-columns: minmax(0,1fr); }
+  .form-field.full, .kv-item.full { grid-column: auto; }
+  .filter-select { width: 100%; min-width: 0; }
+  .module-tabs, .modal-actions, .csv-template-bar { flex-wrap: wrap; }
+  .module-tab { padding: 10px 8px; }
+}
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseBusinessWebsite } from "@/lib/domain-normalizer";
 
 export const LeadStatusEnum = z.enum([
   "NEW_DISCOVERED",
@@ -27,28 +28,39 @@ export const LEAD_STATUS_LABELS: Record<LeadStatus, { label: string; tone: "neut
 };
 
 export const createBusinessSchema = z.object({
-  name: z.string().trim().min(2, "Tên doanh nghiệp phải có ít nhất 2 ký tự"),
-  websiteUrl: z.string().trim().min(3, "Địa chỉ website không được để trống"),
-  industry: z.string().trim().min(2, "Vui lòng chọn hoặc nhập ngành nghề"),
-  category: z.string().trim().optional(),
-  city: z.string().trim().default("Đà Nẵng"),
-  district: z.string().trim().optional(),
-  address: z.string().trim().optional(),
-  phone: z.string().trim().optional(),
-  email: z.string().trim().email("Định dạng email không hợp lệ").optional().or(z.literal("")),
-  dataSource: z.string().trim().default("Thủ công"),
-  notes: z.string().trim().optional(),
+  name: z.string().trim().min(2, "Tên doanh nghiệp phải có ít nhất 2 ký tự").max(200),
+  websiteUrl: z.string().trim().max(2048).refine((value) => !!parseBusinessWebsite(value), "Địa chỉ website HTTP/HTTPS hoặc tên miền không hợp lệ").transform((value) => parseBusinessWebsite(value)!.url),
+  industry: z.string().trim().min(2, "Vui lòng chọn hoặc nhập ngành nghề").max(100),
+  category: z.string().trim().max(200).optional(),
+  city: z.string().trim().min(1).max(100).default("Đà Nẵng"),
+  district: z.string().trim().max(100).optional(),
+  address: z.string().trim().max(500).optional(),
+  phone: z.string().trim().max(50).optional(),
+  email: z.string().trim().max(254).email("Định dạng email không hợp lệ").optional().or(z.literal("")),
+  dataSource: z.string().trim().min(1).max(200).default("Thủ công"),
+  notes: z.string().trim().max(5000).optional(),
 });
 
 export type CreateBusinessInput = z.infer<typeof createBusinessSchema>;
 
-export const updateBusinessSchema = createBusinessSchema.partial().extend({
-  id: z.string(),
+export const updateBusinessSchema = createBusinessSchema.omit({ city: true, dataSource: true }).partial().extend({
+  id: z.string().min(1).max(100),
+  city: z.string().trim().min(1).max(100).optional(),
+  dataSource: z.string().trim().min(1).max(200).optional(),
   leadStatus: LeadStatusEnum.optional(),
   opportunityScore: z.number().int().min(0).max(100).nullable().optional(),
 });
 
 export type UpdateBusinessInput = z.infer<typeof updateBusinessSchema>;
+
+export const businessQuerySchema = z.object({
+  search: z.string().trim().max(200).optional(),
+  area: z.string().trim().max(100).optional(),
+  sector: z.string().trim().max(100).optional(),
+  status: LeadStatusEnum.or(z.literal("Tất cả")).optional(),
+  page: z.number().int().min(1).max(1000000).default(1),
+  limit: z.number().int().min(1).max(50).default(10),
+});
 
 export interface BusinessItem {
   id: string;
@@ -81,6 +93,7 @@ export interface BusinessQueryOptions {
 }
 
 export interface BusinessQueryResult {
+  error?: string;
   items: BusinessItem[];
   total: number;
   page: number;
@@ -109,6 +122,7 @@ export interface ValidatedCsvRow {
   industry: string;
   city: string;
   district?: string;
+  address?: string;
   phone?: string;
   email?: string;
   dataSource: string;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
+import { useState, useEffect, useTransition, useCallback, useRef } from "react";
 import Link from "next/link";
 import { Button, Badge, StatCard, EmptyState } from "@/components/ui/primitives";
 import { BusinessDetailPanel } from "./detail-panel";
@@ -41,9 +41,13 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
   const [openCsvImport, setOpenCsvImport] = useState(false);
 
   const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState(initialData.error ?? null);
+  const requestId = useRef(0);
 
-  const loadBusinesses = (newPage = page) => {
+  const loadBusinesses = useCallback((newPage = 1, preferredId?: string) => {
+    const currentRequest = ++requestId.current;
     startTransition(async () => {
+      try {
       const res = await fetchBusinessesAction({
         search,
         area: area !== "Tất cả" ? area : undefined,
@@ -52,24 +56,29 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
         page: newPage,
         limit: 10,
       });
+      if (currentRequest !== requestId.current) return;
       setData(res);
-      setPage(newPage);
+      setError(null);
+      setPage(res.page);
 
       // If selected business is no longer in items, select first item
       if (res.items.length > 0) {
-        const stillSelected = res.items.find((b) => b.id === selectedBusiness?.id);
-        setSelectedBusiness(stillSelected || res.items[0]);
+        setSelectedBusiness((selected) => res.items.find((b) => b.id === (preferredId ?? selected?.id)) || res.items[0]);
       } else {
         setSelectedBusiness(null);
       }
+      } catch {
+        if (currentRequest === requestId.current) setError("Không thể tải danh sách doanh nghiệp. Vui lòng thử lại.");
+      }
     });
-  };
+  }, [search, area, sector, status]);
 
   // Re-fetch when filters change
   useEffect(() => {
-    loadBusinesses(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, area, sector, status]);
+    const requests = requestId;
+    const timeout = window.setTimeout(() => loadBusinesses(1), 250);
+    return () => { window.clearTimeout(timeout); requests.current++; };
+  }, [loadBusinesses]);
 
   const handleEditOpen = (business: BusinessItem) => {
     setBusinessToEdit(business);
@@ -77,7 +86,7 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
   };
 
   const handleCreateSuccess = (newBiz: BusinessItem) => {
-    loadBusinesses(1);
+    loadBusinesses(1, newBiz.id);
     setSelectedBusiness(newBiz);
   };
 
@@ -89,6 +98,7 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
     if (selectedBusiness?.id === updated.id) {
       setSelectedBusiness(updated);
     }
+    loadBusinesses(page, updated.id);
   };
 
   const handleCsvSuccess = () => {
@@ -101,7 +111,7 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
       <div className="page-heading">
         <div>
           <h1>Khách hàng & Cơ hội</h1>
-          <p>Tự động khám phá doanh nghiệp tiềm năng và quản lý cùng một hồ sơ từ đầu mối đến cơ hội hợp tác.</p>
+          <p>Quản lý hồ sơ doanh nghiệp và nhập dữ liệu thủ công hoặc từ CSV. Khám phá tự động chưa triển khai.</p>
         </div>
         <div className="actions">
           <Button variant="secondary" onClick={() => setOpenCsvImport(true)}>
@@ -117,23 +127,23 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
       <div className="stats">
         <StatCard
           label="Doanh nghiệp phát hiện"
-          value={data.stats.totalCount}
+          value={error ? null : data.stats.totalCount}
           note="Nguồn công khai & nhập thủ công"
         />
         <StatCard
           label="Cần ưu tiên audit"
-          value={data.stats.prioritizeAuditCount}
+          value={error ? null : data.stats.prioritizeAuditCount}
           note="Chưa audit hoặc điểm tham khảo < 70"
         />
         <StatCard
           label="Đã tiếp cận"
-          value={data.stats.outreachSentCount}
-          note="Đã gửi đề xuất qua kênh hợp lệ"
+          value={error ? null : data.stats.outreachSentCount}
+          note="Theo trạng thái hồ sơ đã ghi nhận"
         />
         <StatCard
           label="Khách quan tâm"
-          value={data.stats.inDiscussionCount}
-          note="Phản hồi tích cực, chờ tư vấn"
+          value={error ? null : data.stats.inDiscussionCount}
+          note="Đang trao đổi hoặc đã hợp tác"
         />
       </div>
 
@@ -142,6 +152,7 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
         <button
           type="button"
           className={`module-tab ${activeTab === "discovery" ? "active" : ""}`}
+          aria-pressed={activeTab === "discovery"}
           onClick={() => setActiveTab("discovery")}
         >
           Khám phá & danh sách
@@ -149,10 +160,11 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
         <button
           type="button"
           className={`module-tab ${activeTab === "pipeline" ? "active" : ""}`}
+          aria-pressed={activeTab === "pipeline"}
           onClick={() => setActiveTab("pipeline")}
         >
           Cơ hội hợp tác{" "}
-          {data.stats.inDiscussionCount > 0 && (
+          {!error && data.stats.inDiscussionCount > 0 && (
             <Badge tone="green" className="ml-6">
               {data.stats.inDiscussionCount}
             </Badge>
@@ -170,6 +182,8 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
               </span>
               <input
                 type="text"
+                aria-label="Tìm tên doanh nghiệp hoặc domain"
+                maxLength={200}
                 placeholder="Tìm tên doanh nghiệp hoặc domain..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -232,22 +246,23 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
               ))}
             </select>
 
-            {isPending && <span className="filter-loading-hint">Đang tải...</span>}
+            {isPending && <span className="filter-loading-hint" role="status">Đang tải...</span>}
           </div>
 
           {/* Main 2-column split */}
-          <div className="split">
+          {error && <div className="alert-box alert-red" role="alert">{error}<Button small onClick={() => loadBusinesses(page)} disabled={isPending}>Thử lại</Button></div>}
+          <div className="split" aria-busy={isPending}>
             {/* Left Column: Table & Pagination */}
             <section className="panel" aria-label="Danh sách doanh nghiệp">
               <header className="panel-heading table-header">
                 <div>
-                  <h2>Danh sách doanh nghiệp ({data.total})</h2>
+                  <h2>Danh sách doanh nghiệp ({error ? "—" : data.total})</h2>
                   <p className="hint">Chọn một dòng để xem chi tiết hồ sơ hoặc chuẩn bị audit website.</p>
                 </div>
               </header>
 
               <div className="table-responsive">
-                {data.items.length > 0 ? (
+                {error ? <EmptyState title="Không thể tải dữ liệu" description="Chưa thể xác định số lượng doanh nghiệp. Vui lòng thử lại." /> : data.items.length > 0 ? (
                   <table className="table lead-table">
                     <thead>
                       <tr>
@@ -272,6 +287,8 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
                             key={b.id}
                             className={`table-row-selectable ${isSelected ? "row-selected" : ""}`}
                             onClick={() => setSelectedBusiness(b)}
+                            tabIndex={0}
+                            onKeyDown={(event) => { if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) { event.preventDefault(); setSelectedBusiness(b); } }}
                           >
                             <td>
                               <div className="biz-name-cell">
@@ -310,6 +327,8 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
                                   small
                                   onClick={() => setSelectedBusiness(b)}
                                   title="Xem chi tiết"
+                                  aria-label={`Xem hồ sơ ${b.name}`}
+                                  aria-pressed={isSelected}
                                 >
                                   Xem
                                 </Button>
@@ -344,7 +363,7 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
               </div>
 
               {/* Pagination bar */}
-              {data.totalPages > 1 && (
+              {!error && data.totalPages > 1 && (
                 <div className="pagination-bar">
                   <span className="pagination-info">
                     Trang {data.page} / {data.totalPages} ({data.total} kết quả)
@@ -377,7 +396,7 @@ export function BusinessListPage({ initialData }: BusinessListPageProps) {
             </section>
 
             {/* Right Column: Detail Panel */}
-            <BusinessDetailPanel business={selectedBusiness} onEdit={handleEditOpen} />
+            <BusinessDetailPanel business={error ? null : selectedBusiness} onEdit={handleEditOpen} />
           </div>
         </>
       ) : (

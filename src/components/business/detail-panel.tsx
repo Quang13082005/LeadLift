@@ -31,11 +31,12 @@ export function BusinessDetailPanel({ business, onEdit }: BusinessDetailPanelPro
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
+    timeZone: "Asia/Ho_Chi_Minh",
   });
 
   // Calculate roadmap step highlights
   const isAudited =
-    business.leadStatus !== "NEW_DISCOVERED" && business.leadStatus !== "UNQUALIFIED";
+    ["AUDITED", "QUALIFIED", "CONTACT_READY", "OUTREACH_SENT", "IN_DISCUSSION", "CONVERTED"].includes(business.leadStatus);
   const isOutreachPrepared =
     business.leadStatus === "CONTACT_READY" ||
     business.leadStatus === "OUTREACH_SENT" ||
@@ -67,7 +68,7 @@ export function BusinessDetailPanel({ business, onEdit }: BusinessDetailPanelPro
 
         <div className="website-link-wrap">
           <a
-            href={business.websiteUrl}
+            href={/^https?:\/\//i.test(business.websiteUrl) ? business.websiteUrl : undefined}
             target="_blank"
             rel="noopener noreferrer"
             className="external-link"
@@ -174,6 +175,7 @@ export function BusinessDetailPanel({ business, onEdit }: BusinessDetailPanelPro
             ✉ Chuẩn bị đề xuất
           </Link>
         </div>
+        <p className="hint">Website Audit và soạn đề xuất chưa triển khai; các nút mở trang nền tảng.</p>
 
         {/* Discussion Alert if client replied */}
         {isInterested && (

@@ -214,30 +214,32 @@ Cửa hàng A,Hải Châu,Spa`;
   // SUITE 6: Live HTTP Endpoint Verification (Dev Server on 127.0.0.1:3000)
   // ---------------------------------------------------------------------------
   console.log("\n--- Suite 6: Live HTTP Endpoint & Render Verification ---");
-  try {
-    const healthRes = await fetch("http://127.0.0.1:3000/api/health", { signal: AbortSignal.timeout(2000) });
+  const baseUrl = process.env.BUSINESS_TEST_BASE_URL;
+  if (!baseUrl) console.log("  SKIPPED: live HTTP suite requires BUSINESS_TEST_BASE_URL (GET requests only).");
+  else try {
+    const healthRes = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(30000) });
     if (healthRes.ok) {
-      console.log("  ℹ️  Dev server detected on 127.0.0.1:3000. Running live assertions...");
+      console.log("  Running explicitly configured live HTTP assertions (GET only)...");
 
       // 1. GET /api/businesses
-      const apiBiz = await fetch("http://127.0.0.1:3000/api/businesses");
+      const apiBiz = await fetch(`${baseUrl}/api/businesses`);
       const apiBizData = (await apiBiz.json()) as { items?: unknown[]; total?: number; stats?: unknown };
       assert(apiBiz.status === 200 && Array.isArray(apiBizData.items), "GET /api/businesses returns HTTP 200 with items array");
       assert(typeof apiBizData.total === "number", "GET /api/businesses includes total count number");
       assert(Boolean(apiBizData.stats), "GET /api/businesses includes summary stats object");
 
       // 2. GET /businesses HTML
-      const htmlBiz = await fetch("http://127.0.0.1:3000/businesses");
+      const htmlBiz = await fetch(`${baseUrl}/businesses`);
       assert(htmlBiz.status === 200, "GET /businesses renders successfully (HTTP 200)");
 
       // 3. GET / (Dashboard)
-      const htmlHome = await fetch("http://127.0.0.1:3000/");
+      const htmlHome = await fetch(`${baseUrl}/`);
       assert(htmlHome.status === 200, "GET / (Dashboard) renders successfully (HTTP 200)");
     } else {
-      console.log("  ⚠️  Dev server returned non-200 for health check; skipping live HTTP suite.");
+      assert(false, "Configured live server health check failed");
     }
   } catch {
-    console.log("  ⚠️  Dev server not running on 127.0.0.1:3000; skipping live HTTP suite (unit tests passed).");
+    assert(false, "Configured live HTTP suite could not complete");
   }
 
   console.log(`\n============================================================`);

@@ -3,13 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "type-check": "tsc --noEmit",
     "test:foundation": "tsx scripts/test-foundation.ts",
-    "test:business": "tsx scripts/test-business.ts",
+    "test:business": "tsx scripts/test-business.ts && tsx scripts/test-business-regressions.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
