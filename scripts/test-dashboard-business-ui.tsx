@@ -97,6 +97,17 @@ assert.match(businesses, /lien-he-rat-dai\+kiem-thu@example\.com/);
 assert.match(businesses, /business-cards/);
 assert.doesNotMatch(businesses, /Mộc Coffee \(minh họa\)|An Nhiên Spa \(minh họa\)|Bếp Xưa \(minh họa\)/);
 console.log("PASS business list preserves selected state, businessId audit links, long-value content, and stored-only scores");
+const businessTableMarkup = businesses.match(/<table class="table lead-table business-table">([\s\S]*?)<\/table>/)?.[1];
+assert.ok(businessTableMarkup, "businesses must render a semantic six-column table even with one real row");
+assert.equal((businessTableMarkup.match(/<th\b/g) ?? []).length, 6, "business table must keep all six approved column groups");
+assert.equal((businessTableMarkup.match(/<tbody>[\s\S]*?<tr\b/g) ?? []).length, 1, "one business must render as one table row");
+assert.match(globalCss, /@container business-list \(max-width:700px\)\s*\{\s*\.business-table\s*\{\s*display:none/);
+assert.match(globalCss, /\.business-table td\s*\{\s*padding:8px 10px/);
+assert.match(globalCss, /\.business-table th\s*\{\s*padding:8px;[^}]*white-space:nowrap/);
+assert.match(businesses, /<th>Doanh nghiệp \/ Website<\/th>[\s\S]*?<th>Ngành nghề<\/th>[\s\S]*?<th>Khu vực<\/th>[\s\S]*?<th>Điểm<\/th>[\s\S]*?<th>Trạng thái<\/th>[\s\S]*?<th class="text-right">Thao tác<\/th>/);
+assert.match(businesses, /class="table-row-selectable row-selected"[\s\S]*?aria-selected="true"/);
+assert.match(businesses, /href="\/audit\?businessId=qa-real-record-1"/);
+console.log("PASS business table keeps six columns, one real record as one row, approved compact density, selected state and mobile-only card threshold");
 console.log("PASS customer profile header/body share scoped spacing tokens and responsive header controls remain inside the card");
 
 const emptyData: BusinessQueryResult = {
