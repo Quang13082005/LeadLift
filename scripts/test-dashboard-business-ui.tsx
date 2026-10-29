@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { BusinessListPage } from "../src/components/business/business-list";
@@ -70,6 +72,16 @@ const businesses = renderToStaticMarkup(React.createElement(ToastProvider, null,
   initialData: businessData,
   initialSelectedBusinessId: ratedRecord.id,
 })));
+const globalCss = readFileSync(resolve(process.cwd(), "src/app/globals.css"), "utf8");
+const detailHeaderCss = globalCss.match(/\.detail-panel \.detail-header\s*\{([^}]+)\}/)?.[1];
+const detailBodyCss = globalCss.match(/\.detail-panel > \.detail-body\s*\{([^}]+)\}/)?.[1];
+assert.ok(detailHeaderCss, "Customer profile header must keep a component-scoped layout rule");
+assert.ok(detailBodyCss, "Customer profile body must share its horizontal inset token with the header");
+assert.match(detailHeaderCss, /padding\s*:\s*var\(--space-4\)\s+var\(--detail-inline-inset\)/);
+assert.match(detailBodyCss, /padding\s*:\s*var\(--space-4\)\s+var\(--detail-inline-inset\)/);
+assert.doesNotMatch(detailHeaderCss, /border\s*:\s*0|padding\s*:\s*0/);
+assert.match(globalCss, /\.detail-panel \.header-meta\s*\{[\s\S]*?flex-wrap\s*:\s*wrap/);
+assert.match(globalCss, /\.detail-panel \.header-actions\s*\{[\s\S]*?margin-left\s*:\s*auto/);
 assert.match(businesses, /aria-selected="true"/);
 assert.match(businesses, /aria-pressed="true"/);
 assert.match(businesses, /href="https:\/\/www\.example\.com\/" target="_blank" rel="noopener noreferrer"/);
@@ -85,6 +97,7 @@ assert.match(businesses, /lien-he-rat-dai\+kiem-thu@example\.com/);
 assert.match(businesses, /business-cards/);
 assert.doesNotMatch(businesses, /Mộc Coffee \(minh họa\)|An Nhiên Spa \(minh họa\)|Bếp Xưa \(minh họa\)/);
 console.log("PASS business list preserves selected state, businessId audit links, long-value content, and stored-only scores");
+console.log("PASS customer profile header/body share scoped spacing tokens and responsive header controls remain inside the card");
 
 const emptyData: BusinessQueryResult = {
   items: [], total: 0, page: 1, limit: 10, totalPages: 1,
