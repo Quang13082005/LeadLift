@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { PageHeading, FeatureBanner } from "@/components/page-foundation";
+import { PageHeading } from "@/components/page-foundation";
 import { MultiUrlAuditPanel } from "@/components/scanner/MultiUrlAuditPanel";
 import { parseBusinessWebsite } from "@/lib/domain-normalizer";
 import type { BusinessItem } from "@/types/business";
@@ -34,31 +34,37 @@ function AuditWorkspace({ business, websiteUrl, invalidBusinessId }: { business:
       </button>
       <Link href="/outreach" className="button">Xem đề xuất →</Link>
     </PageHeading>
-    <FeatureBanner kicker="PHÂN TÍCH · XÁC MINH · ĐỀ XUẤT" title="Kiểm tra website có bằng chứng" description="Ưu tiên kết quả có thể giải thích cho người kinh doanh, không chỉ là điểm SEO." />
-    <div className="panel panPad audit-context">
-      <div>
-        <strong>{business?.name || "Chưa chọn doanh nghiệp"}</strong>{" "}
-        <span className="statusnote">{websiteUrl || "Chưa có website hợp lệ trong hồ sơ"}{business?.city ? ` · ${business.city}` : ""}</span>
-        <div className="sub">Kết quả và xác minh tạm thời trong phiên.</div>
-      </div>
-      <Link href="/businesses" className="button button-small">
-        {business ? "Đổi doanh nghiệp" : "Chọn doanh nghiệp"}
-      </Link>
+    <div className={`panel audit-context${business ? "" : " audit-context-empty"}`}>
+      {business ? (
+        <>
+          <div className="audit-business-context">
+            <strong>{business.name}</strong>
+            <div className="audit-business-meta">
+              <span>{websiteUrl || "Chưa có website hợp lệ trong hồ sơ"}</span>
+              {business.city && <span className="audit-business-location">{business.city}</span>}
+            </div>
+            <div className="sub">
+              {websiteUrl
+                ? "Kết quả và xác minh tạm thời trong phiên."
+                : "Hồ sơ chưa có website hợp lệ. Cập nhật địa chỉ HTTP/HTTPS trong Khách hàng & Cơ hội trước khi quét."}
+            </div>
+          </div>
+          <Link href="/businesses" className="button button-primary audit-business-select">Chọn doanh nghiệp</Link>
+        </>
+      ) : (
+        <>
+          <div className="audit-business-empty-copy">
+            <strong>{invalidBusinessId ? "Hồ sơ doanh nghiệp không khả dụng" : "Chưa chọn doanh nghiệp"}</strong>
+            <p>{invalidBusinessId
+              ? "Hồ sơ được yêu cầu không còn khả dụng. Chọn một hồ sơ khác để tiếp tục."
+              : "Chọn hồ sơ doanh nghiệp có website hợp lệ để bắt đầu."}</p>
+          </div>
+          <Link href="/businesses" className="button button-primary audit-business-select">Chọn doanh nghiệp</Link>
+        </>
+      )}
     </div>
 
-    {!business ? (
-      <section className="panel panPad audit-business-empty" aria-label="Chưa chọn doanh nghiệp">
-        <h2>{invalidBusinessId ? "Không tìm thấy hồ sơ doanh nghiệp" : "Chọn doanh nghiệp để bắt đầu"}</h2>
-        <p>{invalidBusinessId ? "Hồ sơ được yêu cầu không còn khả dụng. Hãy chọn doanh nghiệp khác trong danh sách." : "Website Audit chỉ quét website được lưu trong hồ sơ doanh nghiệp. Mở danh sách để chọn một hồ sơ thật."}</p>
-        <Link href="/businesses" className="button button-primary">Mở Khách hàng & Cơ hội</Link>
-      </section>
-    ) : !websiteUrl ? (
-      <section className="panel panPad audit-business-empty" aria-label="Website doanh nghiệp chưa hợp lệ">
-        <h2>Hồ sơ chưa có website hợp lệ</h2>
-        <p>Cập nhật địa chỉ website HTTP/HTTPS trong hồ sơ doanh nghiệp tại Khách hàng & Cơ hội trước khi quét.</p>
-        <Link href={`/businesses?businessId=${encodeURIComponent(business.id)}`} className="button button-primary">Mở hồ sơ doanh nghiệp</Link>
-      </section>
-    ) : (
+    {business && websiteUrl && (
       <MultiUrlAuditPanel key={`${business.id}:${websiteUrl}`} initialUrl={websiteUrl} onRunningChange={setRunning} onRun={() => setHasRun(true)} />
     )}
   </>;

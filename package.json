@@ -9,6 +9,7 @@
     "lint": "eslint",
     "type-check": "tsc --noEmit",
     "test:foundation": "tsx scripts/test-foundation.ts",
+    "test:audit-ui": "tsx scripts/test-audit-ui.tsx",
     "test:business": "tsx scripts/test-business.ts && tsx scripts/test-business-regressions.ts",
     "test:scanner": "tsx scripts/test-scanner.ts",
     "test:crawler": "tsx scripts/test-crawler.ts",

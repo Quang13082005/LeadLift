@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Badge, Button } from "@/components/ui/primitives";
 import { Tabs } from "@/components/ui/tabs";
@@ -11,15 +11,16 @@ type CrawlTab = "issues" | "pages" | "history";
 type CrawlRunState = "idle" | "running" | "completed" | "partial" | "cancelled" | "failed";
 type FindingFilter = "all" | "fail" | "review";
 const PAGE_SIZE = 10;
+const SCOPE_OPTIONS = [20, 50, 100] as const;
 
 function statusText(status: CrawlRunState): string {
   switch (status) {
-    case "running": return "ĐANG QUÉT";
-    case "completed": return "HOÀN TẤT";
-    case "partial": return "KẾT QUẢ MỘT PHẦN";
-    case "cancelled": return "ĐÃ HỦY";
-    case "failed": return "QUÉT THẤT BẠI";
-    default: return "CHƯA QUÉT";
+    case "running": return "Đang quét";
+    case "completed": return "Hoàn tất";
+    case "partial": return "Một phần";
+    case "cancelled": return "Đã hủy";
+    case "failed": return "Thất bại";
+    default: return "Chưa quét";
   }
 }
 
@@ -59,6 +60,7 @@ function upsertRows(rows: CrawlUrlResult[], incoming: CrawlUrlResult): CrawlUrlR
 export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { initialUrl: string; onRunningChange: (running: boolean) => void; onRun: () => void }) {
   const rootUrl = initialUrl;
   const [urlLimit, setUrlLimit] = useState("100");
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [runState, setRunState] = useState<CrawlRunState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
   const [rows, setRows] = useState<CrawlUrlResult[]>([]);
@@ -75,8 +77,20 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
   const [verified, setVerified] = useState<Record<string, boolean>>({});
   const [proposed, setProposed] = useState<Record<string, boolean>>({});
   const abortRef = useRef<AbortController | null>(null);
+  const scopeMenuRootRef = useRef<HTMLDivElement | null>(null);
+  const scopeTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const scopeOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!scopeOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !scopeMenuRootRef.current?.contains(event.target)) setScopeOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [scopeOpen]);
 
   const activeRows = crawlResult?.urlResults ?? rows;
   const allFindings = crawlResult?.findings ?? aggregateCrawlFindings(activeRows);
@@ -104,6 +118,45 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
   const selectedPageUnknown = selectedPage?.findings.filter((finding) => finding.status === "UNKNOWN") ?? [];
   const progressLimit = progress?.limit ?? (Number(urlLimit) || 100);
   const progressValue = Math.min(progress?.completed ?? activeRows.length, progressLimit);
+  const selectedScopeIndex = Math.max(0, SCOPE_OPTIONS.findIndex((limit) => String(limit) === urlLimit));
+
+  const focusScopeOption = (index: number) => {
+    const safeIndex = (index + SCOPE_OPTIONS.length) % SCOPE_OPTIONS.length;
+    scopeOptionRefs.current[safeIndex]?.focus();
+  };
+
+  const openScopeMenu = () => {
+    setScopeOpen(true);
+    window.requestAnimationFrame(() => focusScopeOption(selectedScopeIndex));
+  };
+
+  const closeScopeMenu = (restoreFocus = false) => {
+    setScopeOpen(false);
+    if (restoreFocus) window.requestAnimationFrame(() => scopeTriggerRef.current?.focus());
+  };
+
+  const handleScopeMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const currentIndex = scopeOptionRefs.current.findIndex((option) => option === document.activeElement);
+    const activeIndex = currentIndex < 0 ? selectedScopeIndex : currentIndex;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeScopeMenu(true);
+      return;
+    }
+    if (event.key === "Tab") {
+      setScopeOpen(false);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      const nextIndex = event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? SCOPE_OPTIONS.length - 1
+          : activeIndex + (event.key === "ArrowDown" ? 1 : -1);
+      focusScopeOption(nextIndex);
+    }
+  };
 
   useEffect(() => {
     if (activeTab !== "pages" || !focusedUrl) return;
@@ -255,17 +308,57 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
   return (
     <section className="multi-audit" aria-label="Kiểm toán nhiều URL">
       <form id="website-audit-form" className="audit-scope-controls" onSubmit={startCrawl}>
-        <div className="audit-scope-summary">
-          <span className="kicker">PHẠM VI QUÉT</span>
-          <strong>Tối đa {urlLimit} URL</strong>
-          <span className="audit-scope-summary-note">Cùng hostname · giới hạn hệ thống 100 URL</span>
+        <div className="audit-scope-menu-wrap" ref={scopeMenuRootRef}>
+          <button
+            id="audit-scope-trigger"
+            ref={scopeTriggerRef}
+            type="button"
+            className="audit-scope-trigger"
+            aria-haspopup="menu"
+            aria-expanded={scopeOpen}
+            aria-controls="audit-scope-menu"
+            disabled={runState === "running"}
+            onClick={() => scopeOpen ? setScopeOpen(false) : openScopeMenu()}
+            onKeyDown={(event) => {
+              if (!scopeOpen && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+                event.preventDefault();
+                openScopeMenu();
+              }
+            }}
+          >
+            <span className="audit-scope-gear" aria-hidden="true">⚙</span>
+            <span>Cài đặt phạm vi quét</span>
+            <span className={`audit-scope-chevron${scopeOpen ? " is-open" : ""}`} aria-hidden="true" />
+          </button>
+          <div id="audit-scope-menu" className="audit-scope-menu" role="menu" aria-label="Giới hạn số URL" hidden={!scopeOpen} onKeyDown={handleScopeMenuKeyDown}>
+            {SCOPE_OPTIONS.map((limit, index) => {
+              const selected = String(limit) === urlLimit;
+              return (
+                <button
+                  key={limit}
+                  ref={(element) => { scopeOptionRefs.current[index] = element; }}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selected}
+                  aria-label={`${limit} URL`}
+                  tabIndex={selected ? 0 : -1}
+                  className={`audit-scope-option${selected ? " is-selected" : ""}`}
+                  onClick={() => {
+                    setUrlLimit(String(limit));
+                    closeScopeMenu(true);
+                  }}
+                >
+                  <span>{limit} URL</span>
+                  {selected && <span className="audit-scope-check" aria-hidden="true">✓</span>}
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <details className="audit-scope-details">
-          <summary>Cài đặt phạm vi quét</summary>
-          <label className="audit-limit-label">Số URL tối đa <select aria-label="Giới hạn số URL" className="form-select" value={urlLimit} disabled={runState === "running"} onChange={(event) => setUrlLimit(event.target.value)}>{[20, 50, 100].map((limit) => <option key={limit} value={limit}>{limit} URL</option>)}</select></label>
-          <p className="hint">Chọn tối đa 100 URL. Crawler tuân thủ robots.txt, chỉ theo cùng hostname và giới hạn request.</p>
-        </details>
-        <Badge tone={statusTone(runState)}>{statusText(runState)}</Badge>
+        <Badge className="audit-scope-status" tone={statusTone(runState)} role="status" aria-live="polite">
+          <span className="audit-scope-status-icon" aria-hidden="true">{runState === "completed" ? "✓" : runState === "failed" ? "!" : runState === "running" ? "◌" : runState === "partial" || runState === "cancelled" ? "◐" : "◷"}</span>
+          {statusText(runState)}
+        </Badge>
       </form>
 
       {activeRows.length > 0 && <div className="stats multi-audit-stats">
@@ -275,10 +368,10 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
         <div className="stat"><div className="stat-label">Đã xác minh</div><div className="stat-value">{Object.values(verified).filter(Boolean).length}</div><div className="stat-note">Tạm thời trong phiên</div></div>
       </div>}
 
-      <div className="bannerMini multi-audit-notice">
+      {crawlResult && runState !== "running" && <div className="bannerMini multi-audit-notice">
         <span aria-hidden="true" style={{ fontWeight: "bold", fontSize: 14 }}>ⓘ</span>
         <span>{crawlResult?.coverage ? <>Phạm vi <b>{crawlResult.targetUrl}</b>: đã phát hiện {crawlResult.coverage.discovered}, đủ điều kiện {crawlResult.coverage.eligible}, xếp hàng {crawlResult.coverage.queued}, đã thử {crawlResult.coverage.attempted}, thành công {crawlResult.coverage.succeeded}, lỗi {crawlResult.coverage.failed}, còn lại {crawlResult.coverage.remaining} URL. Bỏ qua theo lần gặp: robots {crawlResult.coverage.skippedOccurrences.robots}, độ sâu {crawlResult.coverage.skippedOccurrences.depth}, giới hạn ứng viên {crawlResult.coverage.skippedOccurrences.candidateLimit}, ngoài phạm vi {crawlResult.coverage.skippedOccurrences.scope}. {crawlResult.coverage.limitReached ? "Đã chạm hạn mức URL." : "Chưa chạm hạn mức URL."} Giới hạn độ sâu 3; tối đa 2 request đồng thời. Kết quả không đại diện toàn bộ website; chưa chạy PageSpeed, không lưu lịch sử.</> : <>Cùng hostname, tối đa 100 URL, độ sâu 3 và 2 request đồng thời. Không suy rộng kết quả thành toàn bộ website; chưa chạy PageSpeed, không lưu lịch sử.</>}</span>
-      </div>
+      </div>}
 
       {crawlResult?.warnings.map((warning, index) => <div key={`${index}-${warning}`} className="alert-box alert-amber multi-audit-error" role="status">{warning}</div>)}
 
