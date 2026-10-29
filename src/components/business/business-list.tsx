@@ -290,7 +290,7 @@ export function BusinessListPage({ initialData, initialSelectedBusinessId, initi
                     <thead>
                       <tr>
                         <th>Doanh nghiệp / Website</th>
-                        <th>Ngành nghề</th>
+                        <th>Ngành</th>
                         <th>Khu vực</th>
                         <th>Điểm</th>
                         <th>Trạng thái</th>
@@ -320,7 +320,7 @@ export function BusinessListPage({ initialData, initialSelectedBusinessId, initi
                                 <BusinessWebsiteLink websiteUrl={b.websiteUrl} className="biz-domain-link" />
                               </div>
                             </td>
-                            <td data-label="Ngành nghề">{b.industry}</td>
+                            <td data-label="Ngành">{b.industry}</td>
                             <td data-label="Khu vực">{b.district ? `${b.district}, ${b.city}` : b.city}</td>
                             <td data-label="Điểm">
                               <BusinessOpportunityScore score={b.opportunityScore} />
@@ -333,6 +333,7 @@ export function BusinessListPage({ initialData, initialSelectedBusinessId, initi
                                 <Button
                                   variant="quiet"
                                   small
+                                  className="biz-table-view-btn"
                                   onClick={() => setSelectedBusiness(b)}
                                   title="Xem chi tiết"
                                   aria-label={`Xem hồ sơ ${b.name}`}
@@ -342,7 +343,7 @@ export function BusinessListPage({ initialData, initialSelectedBusinessId, initi
                                 </Button>
                                 <Link
                                   href={`${demo ? "/dev/design-v2/audit" : "/audit"}?businessId=${encodeURIComponent(b.id)}`}
-                                  className="button button-secondary button-small"
+                                  className="button button-secondary button-small biz-audit-btn"
                                   title="Mở Website Audit"
                                 >
                                   Audit →
