@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Badge, Button } from "@/components/ui/primitives";
 import { Tabs } from "@/components/ui/tabs";
-import { aggregateCrawlFindings } from "@/lib/scanner/crawl-findings";
+import { actionableUrlFindings, aggregateCrawlFindings, uniqueAffectedUrls } from "@/lib/scanner/crawl-findings";
 import type { CrawlFinding, CrawlProgress, CrawlResult, CrawlStreamEvent, CrawlUrlResult } from "@/types/scanner";
 
 type CrawlTab = "issues" | "pages" | "history";
@@ -30,19 +30,11 @@ function statusTone(status: CrawlRunState): "neutral" | "green" | "amber" | "red
   return "blue";
 }
 
-function findingStatusLabel(status: CrawlFinding["status"]): string {
-  if (status === "FAIL") return "FAIL · có bằng chứng";
-  if (status === "REVIEW_REQUIRED") return "Cần người xem xét";
-  if (status === "UNKNOWN") return "Chưa đủ dữ liệu";
-  return "Đạt kiểm tra";
-}
-
 function detectionMethod(finding: CrawlFinding): string {
-  if (finding.ruleId === "HTTP_STATUS") return "Đọc mã phản hồi HTTP của URL đã tải.";
-  if (finding.ruleId === "SEO_TITLE_DUPLICATE" || finding.ruleId === "SEO_META_DESCRIPTION_DUPLICATE") return "So sánh title/meta giữa các URL đã kiểm tra trong cùng hostname.";
-  if (finding.ruleId === "SEO_BROKEN_INTERNAL_LINK") return "Đối chiếu liên kết nội bộ đã tìm thấy với HTTP status của URL đích trong phạm vi crawl.";
-  if (finding.status === "REVIEW_REQUIRED") return `Quy tắc ${finding.ruleId} phát hiện tín hiệu heuristic; cần người dùng đối chiếu.`;
-  return `Phân tích HTML của URL đã tải theo quy tắc ${finding.ruleId}.`;
+  if (finding.ruleId === "HTTP_STATUS") return "Đọc mã phản hồi HTTP của URL đã quét.";
+  if (finding.ruleId === "SEO_TITLE_DUPLICATE" || finding.ruleId === "SEO_META_DESCRIPTION_DUPLICATE") return "So sánh nội dung title hoặc meta description giữa các URL cùng hostname đã quét.";
+  if (finding.ruleId === "SEO_BROKEN_INTERNAL_LINK") return "Đối chiếu liên kết nội bộ với mã HTTP của URL đích trong phạm vi crawl.";
+  return "Phân tích HTML đã tải theo tiêu chí tương ứng; với tín hiệu cần xem xét, kết quả không tự đưa ra kết luận thay người dùng.";
 }
 
 function compactUrl(url: string): string {
@@ -52,6 +44,10 @@ function compactUrl(url: string): string {
   } catch {
     return url;
   }
+}
+
+function affectedUrlCount(finding: CrawlFinding): number {
+  return uniqueAffectedUrls(finding.affectedUrls).length;
 }
 
 function upsertRows(rows: CrawlUrlResult[], incoming: CrawlUrlResult): CrawlUrlResult[] {
@@ -72,8 +68,9 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
   const [filter, setFilter] = useState<FindingFilter>("all");
   const [selectedFindingId, setSelectedFindingId] = useState("");
   const [selectedUrl, setSelectedUrl] = useState<string | null>(null);
+  const [focusedUrl, setFocusedUrl] = useState<string | null>(null);
+  const [urlNavigationMessage, setUrlNavigationMessage] = useState("");
   const [page, setPage] = useState(1);
-  const [permission, setPermission] = useState(false);
   const [acknowledged, setAcknowledged] = useState<Record<string, boolean>>({});
   const [verified, setVerified] = useState<Record<string, boolean>>({});
   const [proposed, setProposed] = useState<Record<string, boolean>>({});
@@ -89,7 +86,7 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
   const visibleFindings = [...allFindings].sort((a, b) =>
     Number(a.status !== "FAIL") - Number(b.status !== "FAIL")
     || severityRank[a.severity] - severityRank[b.severity]
-    || b.affectedUrls.length - a.affectedUrls.length
+    || affectedUrlCount(b) - affectedUrlCount(a)
   ).filter((finding) => {
     if (filter === "all") return finding.status === "FAIL" || finding.status === "REVIEW_REQUIRED";
     if (filter === "fail") return finding.status === "FAIL";
@@ -103,8 +100,19 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
   const pageCount = Math.max(1, Math.ceil(activeRows.length / PAGE_SIZE));
   const visibleRows = activeRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const selectedPage = selectedUrl ? activeRows.find((row) => row.url === selectedUrl) ?? null : null;
+  const selectedPageIssues = selectedPage ? actionableUrlFindings(selectedPage.findings) : [];
+  const selectedPageUnknown = selectedPage?.findings.filter((finding) => finding.status === "UNKNOWN") ?? [];
   const progressLimit = progress?.limit ?? (Number(urlLimit) || 100);
   const progressValue = Math.min(progress?.completed ?? activeRows.length, progressLimit);
+
+  useEffect(() => {
+    if (activeTab !== "pages" || !focusedUrl) return;
+    const visibleUrlRows = Array.from(document.querySelectorAll<HTMLTableRowElement>("[data-crawl-url-row]"));
+    const target = visibleUrlRows.find((row) => row.dataset.crawlUrlRow === focusedUrl);
+    if (!target) return;
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    target.focus({ preventScroll: true });
+  }, [activeTab, activeRows, focusedUrl, page]);
 
   const openOverallFinding = (ruleId: CrawlFinding["ruleId"], status: CrawlFinding["status"], url: string) => {
     const group = allFindings.find((finding) => finding.ruleId === ruleId && finding.status === status && finding.affectedUrls.some((affected) => affected.url === url));
@@ -114,6 +122,20 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
       setFilter("all");
       if (group) setSelectedFindingId(group.id);
     }
+  };
+
+  const navigateToAffectedUrl = (url: string) => {
+    const index = activeRows.findIndex((row) => row.url === url);
+    setSelectedUrl(null);
+    setActiveTab("pages");
+    if (index < 0) {
+      setFocusedUrl(null);
+      setUrlNavigationMessage(`URL ${compactUrl(url)} không có trong danh sách kết quả đã quét của phiên này.`);
+      return;
+    }
+    setUrlNavigationMessage("");
+    setFocusedUrl(url);
+    setPage(Math.floor(index / PAGE_SIZE) + 1);
   };
 
   const handleEvent = (event: CrawlStreamEvent) => {
@@ -140,10 +162,6 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
     event.preventDefault();
     if (runState === "running" || !rootUrl.trim()) return;
     const requestedLimit = Number(urlLimit);
-    if (!permission) {
-      setErrorMessage("Xác nhận bạn sở hữu hoặc được phép kiểm tra website trước khi quét.");
-      return;
-    }
     if (!Number.isInteger(requestedLimit) || ![20, 50, 100].includes(requestedLimit)) {
       setErrorMessage("Chọn hạn mức 20, 50 hoặc 100 URL.");
       setRunState("failed");
@@ -161,6 +179,8 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
     setCrawlResult(null);
     setSelectedFindingId("");
     setSelectedUrl(null);
+    setFocusedUrl(null);
+    setUrlNavigationMessage("");
     setPage(1);
     setProgress({ phase: "ROBOTS", discovered: 0, attempted: 0, completed: 0, failed: 0, limit: requestedLimit });
 
@@ -235,21 +255,25 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
   return (
     <section className="multi-audit" aria-label="Kiểm toán nhiều URL">
       <form id="website-audit-form" className="audit-scope-controls" onSubmit={startCrawl}>
-        <label className="toggle"><input type="checkbox" checked={permission} disabled={runState === "running"} onChange={(event) => setPermission(event.target.checked)} />Tôi sở hữu hoặc được phép kiểm tra website này.</label>
-        <details>
+        <div className="audit-scope-summary">
+          <span className="kicker">PHẠM VI QUÉT</span>
+          <strong>Tối đa {urlLimit} URL</strong>
+          <span className="audit-scope-summary-note">Cùng hostname · giới hạn hệ thống 100 URL</span>
+        </div>
+        <details className="audit-scope-details">
           <summary>Cài đặt phạm vi quét</summary>
-          <label className="audit-limit-label">Tối đa <select aria-label="Giới hạn số URL" className="form-select" value={urlLimit} disabled={runState === "running"} onChange={(event) => setUrlLimit(event.target.value)}>{[20, 50, 100].map((limit) => <option key={limit} value={limit}>{limit} URL</option>)}</select></label>
-          <p className="hint">Chỉ cùng hostname; tối đa 5 phút. Số URL thực tế có thể ít hơn.</p>
+          <label className="audit-limit-label">Số URL tối đa <select aria-label="Giới hạn số URL" className="form-select" value={urlLimit} disabled={runState === "running"} onChange={(event) => setUrlLimit(event.target.value)}>{[20, 50, 100].map((limit) => <option key={limit} value={limit}>{limit} URL</option>)}</select></label>
+          <p className="hint">Chọn tối đa 100 URL. Crawler tuân thủ robots.txt, chỉ theo cùng hostname và giới hạn request.</p>
         </details>
         <Badge tone={statusTone(runState)}>{statusText(runState)}</Badge>
       </form>
 
-      <div className="stats multi-audit-stats">
-        <div className="stat"><div className="stat-label">URL kiểm tra thành công</div><div className="stat-value">{crawlResult?.successfulUrlCount ?? activeRows.filter((row) => row.status === "SCANNED" && (row.httpStatus ?? 0) < 400).length}</div><div className="stat-note">trong tối đa {progress?.limit ?? (Number(urlLimit) || 100)}</div></div>
+      {activeRows.length > 0 && <div className="stats multi-audit-stats">
+        <div className="stat"><div className="stat-label">URL kiểm tra thành công</div><div className="stat-value">{crawlResult?.successfulUrlCount ?? activeRows.filter((row) => row.status === "SCANNED" && (row.httpStatus ?? 0) < 400).length}</div><div className="stat-note">trong {crawlResult?.requestedUrlLimit ?? progress?.limit ?? Number(urlLimit)} URL tối đa</div></div>
         <div className="stat"><div className="stat-label">Nhóm lỗi có bằng chứng</div><div className="stat-value multi-value-danger">{failCount}</div><div className="stat-note">HTTP và rule fail</div></div>
-        <div className="stat"><div className="stat-label">Nhóm cần người xem xét</div><div className="stat-value multi-value-review">{reviewCount}</div><div className="stat-note">Heuristic cần đối chiếu</div></div>
+        <div className="stat"><div className="stat-label">Nhóm cần người xem xét</div><div className="stat-value multi-value-review">{reviewCount}</div><div className="stat-note">Tín hiệu cần đối chiếu</div></div>
         <div className="stat"><div className="stat-label">Đã xác minh</div><div className="stat-value">{Object.values(verified).filter(Boolean).length}</div><div className="stat-note">Tạm thời trong phiên</div></div>
-      </div>
+      </div>}
 
       <div className="bannerMini multi-audit-notice">
         <span aria-hidden="true" style={{ fontWeight: "bold", fontSize: 14 }}>ⓘ</span>
@@ -262,11 +286,11 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
         <div className="panel panPad multi-progress" role="status" aria-live="polite">
           <div className="row space">
             <strong>{progress?.phase === "ROBOTS" ? "Đang đọc robots.txt" : progress?.phase === "SITEMAP" ? "Đang đọc sitemap giới hạn" : progress?.phase === "AGGREGATE" ? "Đang tổng hợp kết quả" : "Đang kiểm tra URL"}</strong>
-            <span>Đã kiểm tra {progress?.completed ?? activeRows.length}/{progress?.limit ?? (Number(urlLimit) || 100)} URL trong phạm vi cho phép</span>
+            <span>Đã thử {progress?.attempted ?? activeRows.length}/{progress?.limit ?? (Number(urlLimit) || 100)} URL</span>
             <Button small type="button" onClick={cancelCrawl}>Hủy quét</Button>
           </div>
           <progress max={progressLimit} value={progressValue} aria-label="Tiến độ kiểm tra URL" />
-          <p className="hint">{progress?.currentUrl || "Đang chuẩn bị phạm vi crawl"} · Đã phát hiện {progress?.discovered ?? 0}, đã thử {progress?.attempted ?? 0}, lỗi {progress?.failed ?? 0}</p>
+          <p className="hint">{progress?.currentUrl || "Đang chuẩn bị phạm vi crawl"} · Đã phát hiện {progress?.discovered ?? 0}, đã thử {progress?.attempted ?? 0}, thành công {Math.max(0, (progress?.completed ?? 0) - (progress?.failed ?? 0))}, lỗi {progress?.failed ?? 0}</p>
         </div>
       )}
 
@@ -285,7 +309,7 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
           <section className="panel panPad multi-empty" aria-label="Kết quả kiểm toán nhiều URL">
             <div className="empty-icon">◷</div>
             <h2>{runState === "failed" ? "Chưa có kết quả crawl" : runState === "running" ? "Đang kiểm tra website" : "Chưa quét website"}</h2>
-            <p>{runState === "failed" ? "Kiểm tra URL hoặc môi trường rồi thử lại. Chưa có kết quả nên chưa thể kết luận website có vấn đề hay đã đạt chuẩn." : runState === "running" ? "Tiến độ cập nhật phía trên; các URL sẽ xuất hiện khi crawler nhận kết quả." : "Chọn website, xác nhận quyền kiểm tra rồi bấm Quét website để bắt đầu."}</p>
+            <p>{runState === "failed" ? "Kiểm tra địa chỉ website hoặc môi trường rồi thử lại. Chưa có kết quả nên chưa thể kết luận website có vấn đề hay đã đạt chuẩn." : runState === "running" ? "Tiến độ cập nhật phía trên; các URL sẽ xuất hiện khi crawler nhận kết quả." : "Bấm Quét website để kiểm tra website công khai trong phạm vi đã chọn."}</p>
           </section>
         ) : visibleFindings.length === 0 && filter === "all" && runState !== "running" ? (
           <section className="panel panPad multi-empty audit-no-issues" aria-label="Không phát hiện vấn đề cần xử lý">
@@ -321,7 +345,7 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
                 >
                   <span className={`ic ${finding.status === "FAIL" || finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "fail" : "review-row"}`} aria-hidden="true">{finding.status === "FAIL" || finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "!" : "•"}</span>
                   <span className="multi-finding-copy"><strong>{finding.ruleName}</strong><small>{finding.description}</small></span>
-                  <span className="multi-finding-count">{finding.affectedUrls.length} URL</span>
+                  <span className="multi-finding-count">{affectedUrlCount(finding)} URL</span>
                   <span className={`chip ${finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "bad" : finding.severity === "MEDIUM" ? "warn" : "blue"}`}>{finding.severity === "CRITICAL" ? "Nghiêm trọng" : finding.severity === "HIGH" ? "Cao" : finding.severity === "MEDIUM" ? "Trung bình" : "Tham khảo"}</span>
                   <Badge tone={verified[finding.id] ? "green" : "amber"}>{verified[finding.id] ? "Đã xác minh (phiên)" : "Chưa xác minh"}</Badge>
                 </button>
@@ -336,23 +360,31 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
             <section className="panel panPad detail multi-finding-detail" aria-label="Bằng chứng nhóm được chọn">
               {activeFinding ? (
                 <>
-                  <div className="audit-evidence-heading"><span className="kicker">CHI TIẾT VẤN ĐỀ</span><Badge tone={verified[activeFinding.id] ? "green" : "amber"}>{verified[activeFinding.id] ? "Đã xác minh trong phiên" : "Chưa xác minh"}</Badge></div>
+                  <div className="audit-evidence-heading">
+                    <span className="kicker">CHI TIẾT VẤN ĐỀ</span>
+                    <div className="audit-detail-badges">
+                      <Badge tone={activeFinding.status === "FAIL" ? "red" : "amber"}>{activeFinding.status === "FAIL" ? "Có bằng chứng" : "Cần đối chiếu"}</Badge>
+                      <Badge tone={verified[activeFinding.id] ? "green" : "amber"}>{verified[activeFinding.id] ? "Đã xác minh trong phiên" : "Chưa xác minh"}</Badge>
+                    </div>
+                  </div>
                   <h2>{activeFinding.ruleName}</h2>
                   <p>{activeFinding.description}</p>
                   <div className="miniTitle">Bằng chứng từ lần quét</div>
                   <div className="evidence audit-evidence-card">
-                    <div className="evrow"><span>Phương pháp phát hiện</span><strong>{detectionMethod(activeFinding)}</strong></div>
-                    <div className="evrow"><span>URL ảnh hưởng</span><strong>{activeFinding.affectedUrls.length} trang / phạm vi đã kiểm tra</strong></div>
-                    <div className="evrow"><span>Trạng thái</span><strong>{activeFinding.status === "REVIEW_REQUIRED" ? "Cần đối chiếu thủ công" : findingStatusLabel(activeFinding.status)} · {activeFinding.severity}</strong></div>
-                    <div className="divider" />
-                    <div className="audit-evidence-raw"><b>Bằng chứng kỹ thuật</b><div className="evidence-snippet">{activeFinding.evidence}</div></div>
+                    <div className="evrow"><span>Nguồn</span><strong>Lượt quét website · {activeFinding.category}</strong></div>
+                    <div className="evrow"><span>URL ảnh hưởng</span><strong>{uniqueAffectedUrls(activeFinding.affectedUrls).length} trang đã quét</strong></div>
+                    <div className="evrow"><span>Trạng thái</span><strong>{activeFinding.status === "REVIEW_REQUIRED" ? "Tín hiệu cần người đối chiếu" : "Có bằng chứng từ lượt quét"} · {activeFinding.severity}</strong></div>
+                    <details className="audit-technical-details">
+                      <summary>Bằng chứng kỹ thuật · xem đầy đủ</summary>
+                      <div className="evidence-snippet">{activeFinding.evidence}</div>
+                      <p>Phương pháp: {detectionMethod(activeFinding)}</p>
+                    </details>
                   </div>
-                  <h3 className="miniTitle">URL bị ảnh hưởng ({activeFinding.affectedUrls.length})</h3>
+                  <h3 className="miniTitle audit-affected-title">URL BỊ ẢNH HƯỞNG ({uniqueAffectedUrls(activeFinding.affectedUrls).length})</h3>
                   <ul className="multi-affected-list">
-                    {activeFinding.affectedUrls.map((affected) => (
+                    {uniqueAffectedUrls(activeFinding.affectedUrls).map((affected) => (
                       <li key={affected.url}>
-                        <button type="button" className="linkbutton" title={affected.url} aria-label={`Mở chi tiết ${affected.url}`} onClick={() => setSelectedUrl(affected.url)}>{compactUrl(affected.url)}</button>
-                        <div className="multi-affected-evidence">{affected.evidence}</div>
+                        <button type="button" className="linkbutton" title={affected.url} aria-label={`Tìm URL đã quét ${affected.url}`} onClick={() => navigateToAffectedUrl(affected.url)}>{compactUrl(affected.url)}</button>
                       </li>
                     ))}
                   </ul>
@@ -363,7 +395,7 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
                     <Button variant="primary" disabled={!acknowledged[activeFinding.id] || Boolean(verified[activeFinding.id]) || (activeFinding.status !== "FAIL" && activeFinding.status !== "REVIEW_REQUIRED")} onClick={() => setVerified((current) => ({ ...current, [activeFinding.id]: true }))}>✓ Xác minh vấn đề</Button>
                     <Button variant="secondary" disabled={!verified[activeFinding.id] || Boolean(proposed[activeFinding.id])} onClick={() => setProposed((current) => ({ ...current, [activeFinding.id]: true }))}>＋ Đưa vào đề xuất</Button>
                   </div>
-                  {(verified[activeFinding.id] || proposed[activeFinding.id]) && <p className="hint audit-session-note" role="status">{proposed[activeFinding.id] ? "Đã đánh dấu trong phiên để xem xét cho đề xuất. Chưa lưu thành đề xuất thật." : "Xác minh tạm thời trong phiên; chưa lưu lâu dài."}</p>}
+                  <p className="hint audit-session-note" role="status">{proposed[activeFinding.id] ? "Đã đánh dấu trong phiên để xem xét cho đề xuất. Chưa lưu thành đề xuất thật." : "Xác minh chỉ tồn tại trong phiên hiện tại; chưa tạo hoặc lưu đề xuất thật."}</p>
                 </>
               ) : <p>Chọn vấn đề bên trái để xem bằng chứng.</p>}
             </section>
@@ -373,21 +405,22 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
 
       {activeTab === "pages" && (
         <section className="panel multi-pages-panel" aria-label="Danh sách URL đã quét">
-          <div className="panelHead"><div><h3>Kết quả theo URL</h3><p className="hint">Mỗi trang có thể có nhiều finding; mở URL để xem toàn bộ bằng chứng gắn với trang đó.</p></div><span className="status-caption">{activeRows.length} URL đã nhận</span></div>
+          <div className="panelHead"><div><h3>URL đã quét</h3><p className="hint">Chỉ đếm vấn đề cần sửa hoặc cần người đối chiếu. Mở chi tiết để xem bằng chứng gắn với URL.</p></div><span className="status-caption">{activeRows.length} URL đã nhận</span></div>
+          {urlNavigationMessage && <div className="alert-box alert-amber multi-url-navigation-note" role="status">{urlNavigationMessage}</div>}
           {activeRows.length === 0 ? (
             <div className="empty-state multi-empty-compact"><div className="empty-icon">◷</div><h3>Chưa có URL để hiển thị</h3><p>Kết quả sẽ xuất hiện khi crawl bắt đầu.</p></div>
           ) : (
             <>
               <div className="multi-table-scroll">
                 <table className="table multi-url-table">
-                  <thead><tr><th>URL</th><th>HTTP</th><th>Trạng thái</th><th>Độ sâu</th><th>Finding</th><th></th></tr></thead>
+                  <thead><tr><th>URL</th><th>HTTP</th><th>Trạng thái</th><th>Độ sâu</th><th>Số vấn đề</th><th></th></tr></thead>
                   <tbody>{visibleRows.map((row) => (
-                    <tr key={row.url}>
+                    <tr key={row.url} data-crawl-url-row={row.url} tabIndex={-1} className={focusedUrl === row.url ? "is-url-focused" : ""}>
                       <td><span className="multi-table-url">{row.url}</span></td>
                       <td>{row.httpStatus ? <span className={`chip ${row.httpStatus < 400 ? "green" : "bad"}`}>HTTP {row.httpStatus}</span> : "—"}</td>
                       <td>{row.status === "SCANNED" ? "Đã quét" : "Không tải được"}</td>
                       <td>{row.depth}</td>
-                      <td>{row.findings.length} <span className="status-caption">finding</span></td>
+                      <td><b>{actionableUrlFindings(row.findings).length}</b> vấn đề</td>
                       <td><button type="button" className="linkbutton" onClick={() => setSelectedUrl(row.url)}>Chi tiết</button></td>
                     </tr>
                   ))}</tbody>
@@ -416,8 +449,8 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
         className="dialog-wide"
         open={selectedUrl !== null}
         onClose={() => setSelectedUrl(null)}
-        title={<div className="modalTopline"><div><div className="kicker">WEBSITE AUDIT / CHI TIẾT URL</div><h2 className="url-modal-heading">{selectedPage?.url || selectedUrl || ""}</h2><div className="hint">{selectedPage ? `Độ sâu ${selectedPage.depth} · Nhận ${selectedPage.findings.length} finding trong lần crawl này` : "Đang tìm kết quả URL."}</div></div></div>}
-        description="Popup chỉ gồm findings thực sự được gắn với URL này. Một URL có thể có nhiều vấn đề độc lập."
+        title={<div className="modalTopline"><div><div className="kicker">WEBSITE AUDIT / CHI TIẾT URL</div><h2 className="url-modal-heading">{selectedPage?.url || selectedUrl || ""}</h2><div className="hint">{selectedPage ? `Độ sâu ${selectedPage.depth} · ${selectedPageIssues.length} vấn đề cần xử lý/xem xét` : "Đang tìm kết quả URL."}</div></div></div>}
+        description="Chỉ hiển thị vấn đề cần xử lý hoặc cần đối chiếu, kèm bằng chứng gắn với đúng URL này."
       >
         {selectedPage ? (
           <>
@@ -426,12 +459,15 @@ export function MultiUrlAuditPanel({ initialUrl, onRunningChange, onRun }: { ini
               <span className="chip blue">{selectedPage.depth === 0 ? "URL gốc" : `Độ sâu ${selectedPage.depth}`}</span>
               <span className="status-caption">Đã quét lúc {new Date(selectedPage.scannedAt).toLocaleString("vi-VN")}</span>
             </div>
-            {selectedPage.findings.length ? selectedPage.findings.map((finding, index) => (
-              <details key={`${finding.ruleId}-${index}`} className="url-issue" open={index === 0}>
-                <summary><span className="ic" aria-hidden="true">{finding.status === "FAIL" ? "!" : finding.status === "UNKNOWN" ? "?" : finding.status === "PASS" ? "✓" : "•"}</span><div style={{ flex: 1, minWidth: 0 }}><b>{finding.ruleName}</b><div className="status-caption">{finding.category} · {findingStatusLabel(finding.status)}</div></div><Badge tone={finding.status === "FAIL" ? "red" : finding.status === "PASS" ? "green" : finding.status === "UNKNOWN" ? "blue" : "amber"}>{finding.severity}</Badge></summary>
-                <div className="body"><p>{finding.description}</p><div className="url-evidence"><b>Bằng chứng</b><div>{finding.evidence}</div><div className="status-caption">Phương pháp: {detectionMethod({ ...finding, id: `${finding.ruleId}-${index}`, affectedUrls: [{ url: selectedPage.url, evidence: finding.evidence }] })}</div></div><div className="fix"><b>Khuyến nghị</b><div>{finding.recommendation || "Đối chiếu bằng chứng trước khi thay đổi."}</div></div><div className="status-caption">Nguồn: {finding.sourceUrl} · {new Date(finding.timestamp).toLocaleString("vi-VN")}</div>{finding.status === "FAIL" || finding.status === "REVIEW_REQUIRED" ? <Button small className="url-overall-button" onClick={() => openOverallFinding(finding.ruleId, finding.status, selectedPage.url)}>Mở vấn đề tổng thể &amp; xác minh →</Button> : <p className="status-caption">{finding.status === "PASS" ? "Tiêu chí đạt; không cần xác minh như một vấn đề." : "Chưa đủ bằng chứng để kết luận vấn đề; không thể xác minh như FAIL."}</p>}</div>
+              {selectedPageIssues.length ? selectedPageIssues.map((finding, index) => {
+                const overallFinding = allFindings.find((group) => group.ruleId === finding.ruleId && group.status === finding.status && group.affectedUrls.some((affected) => affected.url === selectedPage.url));
+                const isVerified = overallFinding ? Boolean(verified[overallFinding.id]) : false;
+                return <details key={finding.ruleId} className="url-issue" open={index === 0}>
+                <summary><span className={`ic ${finding.status === "FAIL" ? "fail" : "review-row"}`} aria-hidden="true">{finding.status === "FAIL" ? "!" : "•"}</span><div className="url-issue-title"><b>{finding.ruleName}</b><div className="status-caption">{finding.category} · {finding.status === "FAIL" ? "Có bằng chứng" : "Cần người đối chiếu"}</div></div><div className="url-issue-badges"><Badge tone={finding.severity === "CRITICAL" || finding.severity === "HIGH" ? "red" : finding.severity === "MEDIUM" ? "amber" : "blue"}>{finding.severity}</Badge><Badge tone={isVerified ? "green" : "amber"}>{isVerified ? "Đã xác minh" : "Chưa xác minh"}</Badge></div></summary>
+                <div className="body"><p>{finding.description}</p>{finding.status === "REVIEW_REQUIRED" && <p className="url-review-note">Đây là tín hiệu cần người xem xét; chưa phải kết luận chắc chắn về SEO.</p>}<div className="url-evidence"><b>Bằng chứng trên URL này</b><div>{finding.evidence}</div><div className="status-caption">Phương pháp: {detectionMethod({ ...finding, id: `${finding.ruleId}-${index}`, affectedUrls: [{ url: selectedPage.url, evidence: finding.evidence }] })}</div></div><div className="fix"><b>Hướng cải thiện</b><div>{finding.recommendation || "Đối chiếu bằng chứng trước khi thay đổi."}</div></div><div className="status-caption">Nguồn: {selectedPage.url} · {new Date(finding.timestamp).toLocaleString("vi-VN")}</div><Button small className="url-overall-button" onClick={() => openOverallFinding(finding.ruleId, finding.status, selectedPage.url)}>Mở vấn đề tổng thể &amp; xác minh →</Button></div>
               </details>
-            )) : <div className="alert-box alert-green"><span className="alert-icon">✓</span><div>Không có finding gắn với URL này trong dữ liệu crawl hiện tại.</div></div>}
+              }) : <div className="alert-box alert-green"><span className="alert-icon">✓</span><div>Chưa phát hiện vấn đề cần xử lý trên URL này trong phạm vi đã quét.</div></div>}
+            {selectedPageUnknown.length > 0 && <details className="audit-diagnostics url-modal-diagnostics"><summary>Thông tin chưa đủ dữ liệu để kết luận ({selectedPageUnknown.length})</summary><ul>{selectedPageUnknown.map((finding, index) => <li key={`${finding.ruleId}-${index}`}><b>{finding.ruleName}</b> · {finding.description}<div>{finding.evidence}</div></li>)}</ul></details>}
             {selectedPage.failureMessage && <div className="alert-box alert-amber" role="status">{selectedPage.failureCode}: {selectedPage.failureMessage}</div>}
             <div className="modal-actions"><Button variant="quiet" onClick={() => setSelectedUrl(null)}>Đóng</Button><Button variant="primary" onClick={() => { setSelectedUrl(null); setActiveTab("pages"); }}>Trở lại danh sách URL</Button></div>
           </>

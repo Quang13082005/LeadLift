@@ -1,5 +1,24 @@
 import type { CrawlFinding, CrawlUrlResult, ScanFinding } from "@/types/scanner";
 
+export function actionableUrlFindings(findings: readonly ScanFinding[]): ScanFinding[] {
+  const unique = new Map<string, ScanFinding>();
+  for (const finding of findings) {
+    if (finding.status !== "FAIL" && finding.status !== "REVIEW_REQUIRED") continue;
+    const current = unique.get(finding.ruleId);
+    if (!current || (current.status === "REVIEW_REQUIRED" && finding.status === "FAIL")) unique.set(finding.ruleId, finding);
+  }
+  return [...unique.values()];
+}
+
+export function uniqueAffectedUrls(affectedUrls: CrawlFinding["affectedUrls"]): CrawlFinding["affectedUrls"] {
+  const seen = new Set<string>();
+  return affectedUrls.filter((affected) => {
+    if (seen.has(affected.url)) return false;
+    seen.add(affected.url);
+    return true;
+  });
+}
+
 export function aggregateCrawlFindings(urlResults: CrawlUrlResult[]): CrawlFinding[] {
   const groups = new Map<string, { finding: ScanFinding; affectedUrls: Array<{ url: string; evidence: string }> }>();
   for (const result of urlResults) {

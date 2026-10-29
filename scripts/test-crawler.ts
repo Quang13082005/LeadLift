@@ -9,6 +9,8 @@ import {
 } from "../src/lib/scanner/crawl-discovery";
 import { safeFetchWebsite, ScannerFetchError, type SafeFetchResult } from "../src/lib/scanner/safe-fetcher";
 import { validateTargetUrl } from "../src/lib/scanner/ssrf-validator";
+import { actionableUrlFindings } from "../src/lib/scanner/crawl-findings";
+import type { ScanFinding } from "../src/types/scanner";
 
 const ROOT = "https://example.com/";
 const longDescription = "Một mô tả trang đủ dài để kiểm tra nội dung website trong bộ kiểm thử mà không tạo kết luận ngoài bằng chứng.";
@@ -55,6 +57,31 @@ async function runTests() {
     assert.equal(CRAWL_LIMITS.maxUrls, 100);
     assert.equal(CRAWL_LIMITS.maxDepth, 3);
     assert.equal(CRAWL_LIMITS.maxConcurrency, 2);
+  });
+
+  await test("URL issue counts keep only actionable findings and count each rule once", () => {
+    const base: ScanFinding = {
+      ruleId: "SEO_TITLE_EXISTS",
+      ruleName: "Có tiêu đề trang",
+      category: "SEO",
+      description: "Trang có thẻ title.",
+      severity: "INFO",
+      status: "PASS",
+      evidence: "Tìm thấy title.",
+      sourceUrl: ROOT,
+      timestamp: new Date(0).toISOString(),
+    };
+    const findings: ScanFinding[] = [
+      base,
+      { ...base, status: "UNKNOWN", evidence: "Không đủ dữ liệu." },
+      { ...base, status: "REVIEW_REQUIRED", severity: "LOW", evidence: "Cần xem xét." },
+      { ...base, status: "FAIL", severity: "HIGH", evidence: "Bằng chứng lỗi." },
+      { ...base, ruleId: "SEO_META_DESCRIPTION", ruleName: "Thiếu meta description", status: "FAIL", severity: "MEDIUM" },
+    ];
+    const actionable = actionableUrlFindings(findings);
+    assert.equal(actionable.length, 2);
+    assert.deepEqual(actionable.map((finding) => finding.status), ["FAIL", "FAIL"]);
+    assert.deepEqual(actionable.map((finding) => finding.ruleId), ["SEO_TITLE_EXISTS", "SEO_META_DESCRIPTION"]);
   });
 
   await test("URL normalizer resolves relative links, strips fragments, and pins exact host", () => {
