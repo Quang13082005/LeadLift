@@ -11,6 +11,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { PipelineView, type PipelineOpportunity } from "./pipeline-view";
 import { fetchBusinessesAction } from "@/app/actions/business";
 import { parseBusinessWebsite } from "@/lib/domain-normalizer";
+import { DomainLabel } from "@/components/ui/domain-label";
 import {
   LEAD_STATUS_LABELS,
   type BusinessItem,
@@ -36,7 +37,7 @@ function BusinessWebsiteLink({ websiteUrl, className }: { websiteUrl: string; cl
       title={`Mở ${website.domain} trong tab mới`}
       onClick={(event) => event.stopPropagation()}
     >
-      {website.domain}<span aria-hidden="true">↗</span>
+      <DomainLabel domain={website.domain} /><span aria-hidden="true">↗</span>
     </a>
   ) : <span className="biz-domain">Website chưa hợp lệ</span>;
 }
@@ -275,7 +276,7 @@ export function BusinessListPage({ initialData, initialSelectedBusinessId, initi
           {error && <div className="alert-box alert-red" role="alert">{error}<Button small onClick={() => loadBusinesses(page)} disabled={isPending}>Thử lại</Button></div>}
           <div className="split" aria-busy={isPending}>
             {/* Left Column: Table & Pagination */}
-            <section className="panel" aria-label="Danh sách doanh nghiệp">
+            <section className="panel business-list-panel" aria-label="Danh sách doanh nghiệp">
               <header className="panel-heading table-header">
                 <div>
                   <h2>Danh sách doanh nghiệp ({error ? "—" : demo ? visibleItems.length : data.total})</h2>

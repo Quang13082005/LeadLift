@@ -4,6 +4,7 @@ import { Badge, EmptyState, StatCard } from "./ui/primitives";
 import { LEAD_STATUS_LABELS } from "@/types/business";
 import type { DashboardData } from "@/lib/services/dashboard-service";
 import { parseBusinessWebsite } from "@/lib/domain-normalizer";
+import { DomainLabel } from "@/components/ui/domain-label";
 
 export function DashboardView({ data, demo = false }: { data: DashboardData; demo?: boolean }) {
   const route = (path: string) => demo ? `/dev/design-v2/${path || "home"}` : `/${path}`;
@@ -16,7 +17,7 @@ export function DashboardView({ data, demo = false }: { data: DashboardData; dem
     <div className="dual dashboard-lower"><section className="panel dashboard-action-list"><header className="panelHead"><div><h2>Khách hàng cần hành động</h2><p className="hint">Được cập nhật theo trạng thái cùng một hồ sơ.</p></div><Link className="button button-small" href={route("businesses")}>Xem danh sách →</Link></header>{data.items.length ? <>
       <div className="tableWrap dashboard-action-table-wrap"><table className="table dashboard-table" style={{ minWidth: 0, tableLayout: "fixed" }}><thead><tr><th>Doanh nghiệp</th><th>Website</th><th>Trạng thái</th><th><span className="sr-only">Hồ sơ</span></th></tr></thead><tbody>{data.items.map(b => {
       const website = parseBusinessWebsite(b.websiteUrl);
-      return <tr key={b.id}><td data-label="Doanh nghiệp"><b>{b.name}</b></td><td data-label="Website">{website ? <a className="dashboard-website-link" href={website.url} target="_blank" rel="noopener noreferrer" title={`Mở ${website.domain} trong tab mới`}>{website.domain}<span aria-hidden="true">↗</span></a> : <span className="dashboard-website-invalid">Website chưa hợp lệ</span>}</td><td data-label="Trạng thái"><Badge tone={LEAD_STATUS_LABELS[b.leadStatus].tone}>{LEAD_STATUS_LABELS[b.leadStatus].label}</Badge></td><td data-label="Hành động"><Link className="button button-small" href={`${route("businesses")}?businessId=${encodeURIComponent(b.id)}`} aria-label={`Xem hồ sơ ${b.name}`}>Xem</Link></td></tr>;
+      return <tr key={b.id}><td data-label="Doanh nghiệp"><b>{b.name}</b></td><td data-label="Website">{website ? <a className="dashboard-website-link" href={website.url} target="_blank" rel="noopener noreferrer" title={`Mở ${website.domain} trong tab mới`}><DomainLabel domain={website.domain} /><span aria-hidden="true">↗</span></a> : <span className="dashboard-website-invalid">Website chưa hợp lệ</span>}</td><td data-label="Trạng thái"><Badge tone={LEAD_STATUS_LABELS[b.leadStatus].tone}>{LEAD_STATUS_LABELS[b.leadStatus].label}</Badge></td><td data-label="Hành động"><Link className="button button-small" href={`${route("businesses")}?businessId=${encodeURIComponent(b.id)}`} aria-label={`Xem hồ sơ ${b.name}`}>Xem</Link></td></tr>;
     })}</tbody></table></div>
       <div className="dashboard-action-cards" role="list" aria-label="Khách hàng cần hành động">
         {data.items.map((business) => {
@@ -24,7 +25,7 @@ export function DashboardView({ data, demo = false }: { data: DashboardData; dem
           return <article className="dashboard-action-card" role="listitem" key={`card-${business.id}`}>
             <b>{business.name}</b>
             <span className="dashboard-card-label">Website</span>
-            {website ? <a className="dashboard-website-link" href={website.url} target="_blank" rel="noopener noreferrer" title={`Mở ${website.domain} trong tab mới`}>{website.domain}<span aria-hidden="true">↗</span></a> : <span className="dashboard-website-invalid">Website chưa hợp lệ</span>}
+            {website ? <a className="dashboard-website-link" href={website.url} target="_blank" rel="noopener noreferrer" title={`Mở ${website.domain} trong tab mới`}><DomainLabel domain={website.domain} /><span aria-hidden="true">↗</span></a> : <span className="dashboard-website-invalid">Website chưa hợp lệ</span>}
             <div className="dashboard-action-card-bottom"><div><span className="dashboard-card-label">Trạng thái</span><Badge tone={LEAD_STATUS_LABELS[business.leadStatus].tone}>{LEAD_STATUS_LABELS[business.leadStatus].label}</Badge></div><Link className="button button-small" href={`${route("businesses")}?businessId=${encodeURIComponent(business.id)}`} aria-label={`Xem hồ sơ ${business.name}`}>Xem</Link></div>
           </article>;
         })}

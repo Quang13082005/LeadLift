@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Button, Badge, EmptyState } from "@/components/ui/primitives";
 import { LEAD_STATUS_LABELS, type BusinessItem } from "@/types/business";
 import { parseBusinessWebsite } from "@/lib/domain-normalizer";
+import { DomainLabel } from "@/components/ui/domain-label";
 
 interface BusinessDetailPanelProps {
   business: BusinessItem | null;
@@ -78,7 +79,7 @@ export function BusinessDetailPanel({ business, onEdit, demo = false }: Business
               className="external-link"
               title={`Mở ${website.domain} trong tab mới`}
             >
-              {website.domain} <span aria-hidden="true">↗</span>
+              <DomainLabel domain={website.domain} /> <span aria-hidden="true">↗</span>
             </a>
           ) : <span className="invalid-website">Website chưa hợp lệ</span>}
         </div>
