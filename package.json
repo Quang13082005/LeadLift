@@ -14,6 +14,7 @@
     "test:business": "tsx scripts/test-business.ts && tsx scripts/test-business-regressions.ts",
     "test:scanner": "tsx scripts/test-scanner.ts",
     "test:crawler": "tsx scripts/test-crawler.ts",
+    "test:crawl-audit-schema": "tsx scripts/test-crawl-audit-schema.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

@@ -58,6 +58,28 @@ enum FindingStatus {
   REJECTED
 }
 
+enum CrawlAuditRunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELLED
+  BLOCKED
+}
+
+enum CrawlUrlStatus {
+  SCANNED
+  FAILED
+}
+
+enum CrawlFindingResultStatus {
+  PASS
+  FAIL
+  REVIEW_REQUIRED
+  UNKNOWN
+}
+
 enum ContactType {
   EMAIL
   PHONE
@@ -101,6 +123,7 @@ model User {
 
   verifiedFindings AuditFinding[]  @relation("FindingVerifier")
   outreachEvents   OutreachEvent[]
+  crawlFindingVerifications CrawlFindingVerification[]
 
   @@map("users")
 }
@@ -130,6 +153,7 @@ model Business {
   contactPoints  ContactPoint[]
   outreachDrafts OutreachDraft[]
   outreachEvents OutreachEvent[]
+  crawlAuditRuns  CrawlAuditRun[]
 
   @@index([normalizedDomain])
   @@index([industry, city])
@@ -203,6 +227,134 @@ model AuditFinding {
   @@index([severity])
   @@index([status])
   @@map("audit_findings")
+}
+
+model CrawlAuditRun {
+  id                         String               @id @default(cuid())
+  businessId                 String
+  business                   Business             @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  rootUrl                    String               @db.VarChar(2048) // Sanitized snapshot; never persist URL credentials, fragments, or sensitive query values.
+  rootHost                   String               @db.VarChar(253)
+  requestedUrlLimit          Int
+  depthLimit                 Int
+  concurrencyLimit           Int
+  status                     CrawlAuditRunStatus  @default(PENDING)
+  startedAt                  DateTime?            @db.Timestamptz(3)
+  finishedAt                 DateTime?            @db.Timestamptz(3)
+  createdAt                  DateTime             @default(now()) @db.Timestamptz(3)
+  scannerVersion             String               @db.VarChar(40)
+  rulesetVersion             String               @db.VarChar(40)
+  urlFingerprintKeyVersion   String               @db.VarChar(40)
+  comparisonKeyVersion      String               @db.VarChar(40)
+  idempotencyKey             String?              @db.VarChar(128)
+  discoveredCount            Int                  @default(0)
+  eligibleCount              Int                  @default(0)
+  queuedCount                Int                  @default(0)
+  attemptedCount             Int                  @default(0)
+  succeededCount             Int                  @default(0)
+  failedCount                Int                  @default(0)
+  skippedRobotsCount         Int                  @default(0)
+  skippedDepthCount          Int                  @default(0)
+  skippedCandidateLimitCount Int                  @default(0)
+  skippedScopeCount          Int                  @default(0)
+  remainingCount             Int                  @default(0)
+  limitReached               Boolean              @default(false)
+  discoveryTruncated         Boolean              @default(false)
+  downloadedBytes            BigInt               @default(0)
+  stopReasonCode             String?              @db.VarChar(80)
+  warningsJson               String?              @db.VarChar(4000) // Sanitized, bounded JSON string; never raw crawl payloads.
+  urls                       CrawlScannedUrl[]
+  findings                   CrawlAuditFinding[]
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, startedAt(sort: Desc)])
+  @@index([status, startedAt])
+  @@map("crawl_audit_runs")
+}
+
+model CrawlScannedUrl {
+  id                String             @id @default(cuid())
+  runId             String
+  run               CrawlAuditRun      @relation(fields: [runId], references: [id], onDelete: Restrict)
+  urlFingerprint    String             @db.VarChar(64) // HMAC-SHA-256 hex of canonical URL; urlFingerprintKeyVersion lives on the run.
+  sanitizedUrl      String             @db.VarChar(2048)
+  sanitizedFinalUrl String?            @db.VarChar(2048)
+  depth             Int
+  status            CrawlUrlStatus
+  httpStatus        Int?
+  statusText        String?            @db.VarChar(120)
+  title             String?            @db.VarChar(500)
+  metaDescription   String?            @db.VarChar(2000)
+  responseTimeMs    Int?
+  contentType       String?            @db.VarChar(255)
+  contentLength     BigInt?
+  scannedAt         DateTime           @db.Timestamptz(3)
+  failureCode       String?            @db.VarChar(80)
+  failureMessage    String?            @db.VarChar(1000)
+  occurrences       CrawlFindingOccurrence[]
+
+  @@unique([runId, id])
+  @@unique([runId, urlFingerprint])
+  @@index([runId, status])
+  @@index([runId, depth])
+  @@map("crawl_scanned_urls")
+}
+
+model CrawlAuditFinding {
+  id               String                    @id @default(cuid())
+  runId            String
+  run              CrawlAuditRun             @relation(fields: [runId], references: [id], onDelete: Restrict)
+  comparisonKey    String                    @db.VarChar(160) // Status-independent identity; compare only when comparisonKeyVersion matches.
+  findingKey       String                    @db.VarChar(200) // Deterministic grouping key unique within this run; includes current result grouping.
+  ruleId           String                    @db.VarChar(80)
+  category         String                    @db.VarChar(40)
+  severity         FindingSeverity
+  resultStatus     CrawlFindingResultStatus
+  ruleName         String                    @db.VarChar(160)
+  description      String                    @db.VarChar(4000)
+  recommendation   String                    @db.VarChar(4000)
+  createdAt        DateTime                  @default(now()) @db.Timestamptz(3)
+  occurrences      CrawlFindingOccurrence[]
+  verifications    CrawlFindingVerification[]
+
+  @@unique([runId, id])
+  @@unique([runId, findingKey])
+  @@index([runId, comparisonKey])
+  @@index([runId, resultStatus, severity])
+  @@map("crawl_audit_findings")
+}
+
+model CrawlFindingOccurrence {
+  id            String                    @id @default(cuid())
+  runId         String
+  findingId     String
+  scannedUrlId  String
+  finding       CrawlAuditFinding         @relation(fields: [runId, findingId], references: [runId, id], onDelete: Restrict)
+  scannedUrl    CrawlScannedUrl           @relation(fields: [runId, scannedUrlId], references: [runId, id], onDelete: Restrict)
+  resultStatus  CrawlFindingResultStatus
+  evidence      String                    @db.VarChar(8000) // Bounded and scrubbed by the persistence boundary.
+  observedAt    DateTime                  @default(now()) @db.Timestamptz(3)
+
+  @@unique([runId, findingId, scannedUrlId])
+  @@index([runId, findingId])
+  @@index([runId, scannedUrlId])
+  @@map("crawl_finding_occurrences")
+}
+
+model CrawlFindingVerification {
+  id           String           @id @default(cuid())
+  runId        String
+  findingId    String
+  finding      CrawlAuditFinding @relation(fields: [runId, findingId], references: [runId, id], onDelete: Restrict)
+  status       FindingStatus
+  note         String?          @db.VarChar(2000)
+  actorUserId  String
+  actorUser    User             @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+  createdAt    DateTime         @default(now()) @db.Timestamptz(3)
+
+  @@index([runId, findingId, createdAt(sort: Desc)])
+  @@index([actorUserId, createdAt(sort: Desc)])
+  @@map("crawl_finding_verifications")
 }
 
 model ContactPoint {
