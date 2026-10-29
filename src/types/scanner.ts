@@ -144,6 +144,20 @@ export interface CrawlFinding {
 }
 
 export interface CrawlResult {
+  /** Bounded discovery coverage; skipped counters are occurrences, not unique URLs. */
+  coverage?: {
+    discovered: number;
+    eligible: number;
+    queued: number;
+    attempted: number;
+    succeeded: number;
+    failed: number;
+    skippedOccurrences: { robots: number; depth: number; candidateLimit: number; scope: number };
+    remaining: number;
+    limitReached: boolean;
+    discoveryTruncated: boolean;
+    downloadedBytes: number;
+  };
   id: string;
   targetUrl: string;
   rootHost: string;

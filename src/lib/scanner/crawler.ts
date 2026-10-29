@@ -18,17 +18,25 @@ import type { CrawlProgress, CrawlResult, CrawlStreamEvent, CrawlUrlResult, Pars
 export { aggregateCrawlFindings } from "./crawl-findings";
 
 export const CRAWL_LIMITS = {
-  maxUrls: 20,
+  maxUrls: 100,
   maxDepth: 3,
   maxConcurrency: 2,
   requestDelayMs: 250,
-  maxDurationMs: 120_000,
+  maxDurationMs: 300_000,
+  maxActiveRuns: 2,
+  maxCandidates: 2000,
+  maxDownloadedBytes: 32 * 1024 * 1024,
+  maxResultBytes: 8 * 1024 * 1024,
   maxSitemapDocuments: 5,
-  maxSitemapLocations: 200,
+  maxSitemapLocations: 2000,
   maxLinksPerPage: 200,
   maxBodySizeBytes: 2 * 1024 * 1024,
   requestTimeoutMs: 10_000,
 } as const;
+
+// One local Node process is the supported deployment. Keep leases across dev HMR.
+const crawlRuntime = globalThis as typeof globalThis & { leadliftActiveCrawlHosts?: Set<string> };
+const activeCrawlHosts = crawlRuntime.leadliftActiveCrawlHosts ??= new Set<string>();
 
 export class CrawlerServiceError extends Error {
   code: string;
@@ -52,7 +60,7 @@ export interface CrawlOptions {
   fetchPage?: CrawlFetcher;
   /** Test seam; production uses the fixed 250ms delay. */
   requestDelayMs?: number;
-  /** Test seam; production uses the fixed 120 second deadline. */
+  /** Test seam; production uses the configured 300 second run deadline. */
   maxDurationMs?: number;
 }
 
@@ -176,13 +184,15 @@ function makePageResult(
     status: "SCANNED",
     httpStatus: fetched.httpStatus,
     statusText: fetched.statusText,
-    ...(pageData?.title ? { title: pageData.title } : {}),
-    ...(pageData?.metaDescription ? { metaDescription: pageData.metaDescription } : {}),
+    ...(pageData?.title && pageData.title.length <= 2048 ? { title: pageData.title } : {}),
+    ...(pageData?.metaDescription && pageData.metaDescription.length <= 2048 ? { metaDescription: pageData.metaDescription } : {}),
     responseTimeMs: fetched.responseTimeMs,
     contentType: fetched.contentType,
     contentLength: fetched.contentLength,
     scannedAt: new Date().toISOString(),
-    findings,
+    findings: findings.map((finding) => ({ ...finding,
+      evidence: finding.evidence.length > 4096 ? finding.evidence.slice(0, 4096) + "… [bằng chứng được rút gọn]" : finding.evidence,
+    })),
     internalLinks,
   };
 }
@@ -224,7 +234,7 @@ function duplicateFinding(
     description: isTitle
       ? "Nhiều URL dùng cùng tiêu đề. Cần xem nội dung và vai trò từng trang trước khi quyết định có nên viết lại."
       : "Nhiều URL dùng cùng mô tả meta. Cần đối chiếu nội dung từng trang trước khi kết luận mức độ ảnh hưởng.",
-    evidence: `Giá trị trùng: “${value}”. URL ảnh hưởng: ${urls.join(", ")}.`,
+    evidence: `Giá trị trùng: “${value}”. ${urls.length} URL ảnh hưởng; xem danh sách URL trong nhóm.`,
     sourceUrl: urls[0],
     timestamp: new Date().toISOString(),
     recommendation: isTitle
@@ -294,6 +304,23 @@ function addCrossUrlFindings(results: CrawlUrlResult[]): void {
 
 export async function runMultiUrlScan(rawRootUrl: string, options: CrawlOptions = {}): Promise<CrawlResult> {
   enforceScannerDevOnly();
+  const validation = validateTargetUrl(rawRootUrl);
+  if (!validation.valid || !validation.normalizedUrl) {
+    throw new CrawlerServiceError(validation.reason || "URL không hợp lệ.", validation.code || "INVALID_ROOT_URL");
+  }
+  const host = new URL(validation.normalizedUrl).hostname.toLowerCase().replace(/\.$/, "");
+  if (activeCrawlHosts.has(host)) throw new CrawlerServiceError("Website này đang được quét. Hãy chờ hoặc hủy lượt hiện tại.", "HOST_CRAWL_BUSY", 409);
+  if (activeCrawlHosts.size >= CRAWL_LIMITS.maxActiveRuns) throw new CrawlerServiceError("Đã đạt giới hạn hai lượt quét trên máy. Hãy thử lại sau.", "LOCAL_CRAWL_BUSY", 429);
+  activeCrawlHosts.add(host);
+  try {
+    return await runBoundedCrawl(rawRootUrl, options);
+  } finally {
+    activeCrawlHosts.delete(host);
+  }
+}
+
+async function runBoundedCrawl(rawRootUrl: string, options: CrawlOptions): Promise<CrawlResult> {
+  enforceScannerDevOnly();
   const maxUrls = options.maxUrls ?? CRAWL_LIMITS.maxUrls;
   if (!Number.isInteger(maxUrls) || maxUrls < 1 || maxUrls > CRAWL_LIMITS.maxUrls) {
     throw new CrawlerServiceError(`Giới hạn URL phải là số nguyên từ 1 đến ${CRAWL_LIMITS.maxUrls}.`, "INVALID_URL_LIMIT");
@@ -313,7 +340,12 @@ export async function runMultiUrlScan(rawRootUrl: string, options: CrawlOptions 
   const warnings: string[] = [];
   const queue: QueueItem[] = [];
   const known = new Map<string, QueueItem>();
+  const discoveredUrls = new Set<string>();
+  let discoveryTruncated = false;
   const results: CrawlUrlResult[] = [];
+  let downloadedBytes = 0;
+  let resultBytes = 0;
+  const skipped = { robots: 0, depth: 0, candidateLimit: 0, scope: 0 };
   const fetchPage = options.fetchPage || safeFetchWebsite;
   const rateLimiter = new HostRateLimiter(options.requestDelayMs ?? CRAWL_LIMITS.requestDelayMs);
   const controller = new AbortController();
@@ -345,24 +377,42 @@ export async function runMultiUrlScan(rawRootUrl: string, options: CrawlOptions 
     await rateLimiter.wait(controller.signal);
     const elapsed = Date.now() - Date.parse(startedAt);
     const remainingMs = Math.max(1, durationMs - elapsed);
-    return fetchPage(url, {
+    const response = await fetchPage(url, {
       allowedHost: rootHost,
       allowXml,
       maxBodySizeBytes: CRAWL_LIMITS.maxBodySizeBytes,
       totalTimeoutMs: Math.min(CRAWL_LIMITS.requestTimeoutMs, remainingMs),
       signal: controller.signal,
     });
+    downloadedBytes += Buffer.byteLength(response.htmlBody, "utf8");
+    if (downloadedBytes > CRAWL_LIMITS.maxDownloadedBytes) {
+      stopReason = "DOWNLOAD_BUDGET";
+      finalStatus = "PARTIAL";
+      controller.abort(new Error(stopReason));
+      throw new ScannerFetchError("Đã đạt giới hạn dữ liệu của lượt quét.", stopReason, url);
+    }
+    return response;
   };
 
   const enqueue = (url: string, depth: number, sourceUrl: string) => {
     const normalized = normalizeCrawlUrl(url, sourceUrl, rootHost);
-    if (!normalized || !isAllowedByRobots(normalized, robotsPolicy)) return;
+    if (!normalized) { skipped.scope++; return; }
+    if (!discoveredUrls.has(normalized)) {
+      if (discoveredUrls.size >= CRAWL_LIMITS.maxCandidates) {
+        discoveryTruncated = true;
+        skipped.candidateLimit++;
+        return;
+      }
+      discoveredUrls.add(normalized);
+    }
+    if (!isAllowedByRobots(normalized, robotsPolicy)) { skipped.robots++; return; }
+    if (depth > CRAWL_LIMITS.maxDepth) { skipped.depth++; return; }
     const existing = known.get(normalized);
     if (existing) {
       existing.discoveredFrom.add(sourceUrl);
       return;
     }
-    if (known.size >= maxUrls) return;
+    if (known.size >= CRAWL_LIMITS.maxCandidates) { skipped.candidateLimit++; return; }
     const item: QueueItem = { url: normalized, depth, discoveredFrom: new Set([sourceUrl]) };
     known.set(normalized, item);
     queue.push(item);
@@ -459,6 +509,7 @@ export async function runMultiUrlScan(rawRootUrl: string, options: CrawlOptions 
         if (sitemap.httpStatus < 200 || sitemap.httpStatus >= 400) continue;
 
         const locations = parseSitemapLocs(sitemap.htmlBody, CRAWL_LIMITS.maxSitemapLocations);
+        if (locations.length >= CRAWL_LIMITS.maxSitemapLocations) discoveryTruncated = true;
         if (isSitemapIndex(sitemap.htmlBody)) {
           for (const location of locations) {
             const nested = normalizeCrawlUrl(location, sitemap.finalUrl, rootHost);
@@ -470,7 +521,6 @@ export async function runMultiUrlScan(rawRootUrl: string, options: CrawlOptions 
         } else {
           for (const location of locations) {
             enqueue(location, 1, sitemap.finalUrl);
-            if (known.size >= maxUrls) break;
           }
         }
       } catch (error) {
@@ -488,12 +538,19 @@ export async function runMultiUrlScan(rawRootUrl: string, options: CrawlOptions 
       }
       if (cancelledByUser) warnings.push("Đã hủy crawl; giữ lại các kết quả đã hoàn thành.");
     }
+    if (sitemapQueue.length > 0) discoveryTruncated = true;
 
     if (!controller.signal.aborted) {
       currentPhase = "CRAWL";
       publishProgress();
       const workers = Array.from({ length: CRAWL_LIMITS.maxConcurrency }, async () => {
-        while (queue.length > 0 && !controller.signal.aborted) {
+        while (queue.length > 0 && attempted < maxUrls && !controller.signal.aborted) {
+          // Prefer the root, frequently linked pages and short paths. Stable URL
+          // tie-breaking avoids interpreting sitemap order as business importance.
+          queue.sort((a, b) => Number(b.url === rootUrl) - Number(a.url === rootUrl)
+            || b.discoveredFrom.size - a.discoveredFrom.size
+            || new URL(a.url).pathname.split("/").filter(Boolean).length - new URL(b.url).pathname.split("/").filter(Boolean).length
+            || a.url.localeCompare(b.url));
           const item = queue.shift();
           if (!item) return;
           attempted++;
@@ -522,10 +579,9 @@ export async function runMultiUrlScan(rawRootUrl: string, options: CrawlOptions 
               pageData = analyzed.pageData;
               if (fetched.httpStatus >= 200 && fetched.httpStatus < 300) {
                 const discovered = extractInternalLinks(fetched.htmlBody, fetched.finalUrl, rootHost, CRAWL_LIMITS.maxLinksPerPage);
+                if (discovered.length >= CRAWL_LIMITS.maxLinksPerPage) discoveryTruncated = true;
                 internalLinks = discovered.map((entry) => entry.url);
-                if (item.depth < CRAWL_LIMITS.maxDepth) {
-                  for (const entry of discovered) enqueue(entry.url, item.depth + 1, item.url);
-                }
+                for (const entry of discovered) enqueue(entry.url, item.depth + 1, item.url);
               }
             }
             row = makePageResult(item, fetched, pageFindings, internalLinks, pageData);
@@ -545,6 +601,14 @@ export async function runMultiUrlScan(rawRootUrl: string, options: CrawlOptions 
             failed++;
           }
 
+          const rowBytes = Buffer.byteLength(JSON.stringify(row), "utf8");
+          if (resultBytes + rowBytes > CRAWL_LIMITS.maxResultBytes) {
+            stopReason = "RESULT_BUDGET";
+            finalStatus = "PARTIAL";
+            controller.abort(new Error(stopReason));
+            row = makeFailedResult(item, new Error(stopReason), stopReason);
+          }
+          resultBytes += Buffer.byteLength(JSON.stringify(row), "utf8");
           results.push(row);
           completed++;
           if (row.status === "FAILED") failed = Math.max(failed, results.filter((result) => result.status === "FAILED").length);
@@ -590,6 +654,19 @@ export async function runMultiUrlScan(rawRootUrl: string, options: CrawlOptions 
       findings: aggregateCrawlFindings(results),
       progress: makeProgress(currentPhase, known.size, attempted, completed, failed, maxUrls),
       warnings,
+      coverage: {
+        discovered: discoveredUrls.size,
+        eligible: known.size,
+        queued: known.size,
+        attempted,
+        succeeded: results.filter((row) => row.status === "SCANNED" && (row.httpStatus || 0) >= 200 && (row.httpStatus || 0) < 300).length,
+        failed: results.filter((row) => row.status === "FAILED" || (row.httpStatus || 0) >= 400).length,
+        skippedOccurrences: skipped,
+        remaining: queue.length,
+        limitReached: attempted >= maxUrls && queue.length > 0,
+        discoveryTruncated,
+        downloadedBytes,
+      },
       ...(stopReason ? { stopReason } : {}),
     };
     emit(options, { type: "complete", result: crawlResult });

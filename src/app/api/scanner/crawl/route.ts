@@ -3,7 +3,7 @@ import { CRAWL_LIMITS, CrawlerServiceError, runMultiUrlScan } from "@/lib/scanne
 import { enforceScannerDevOnly, ScannerServiceError } from "@/lib/scanner/scanner-service";
 import type { CrawlStreamEvent } from "@/types/scanner";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const MAX_REQUEST_BYTES = 16 * 1024;
 
@@ -100,7 +100,13 @@ export async function POST(request: NextRequest) {
         const send = (event: CrawlStreamEvent) => {
           try {
             if (streamController?.desiredSize === null) return;
-            streamController?.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+            const chunk = encoder.encode(`${JSON.stringify(event)}\n`);
+            if (chunk.byteLength > 16 * 1024 * 1024 || (streamController?.desiredSize ?? 0) < 0) {
+              abortController.abort(new Error("SLOW_CONSUMER"));
+              streamController?.error(new Error("Luồng đọc quá chậm; giữ các kết quả đã nhận và thử lại với phạm vi nhỏ hơn."));
+              return;
+            }
+            streamController?.enqueue(chunk);
           } catch {
             abortController.abort(new Error("CLIENT_DISCONNECTED"));
           }
@@ -123,7 +129,7 @@ export async function POST(request: NextRequest) {
         abortController.abort(new Error("CLIENT_DISCONNECTED"));
         request.signal.removeEventListener("abort", onRequestAbort);
       },
-    });
+    }, { highWaterMark: 16 * 1024 * 1024, size: (chunk) => chunk.byteLength });
 
     return new Response(stream, {
       status: 200,

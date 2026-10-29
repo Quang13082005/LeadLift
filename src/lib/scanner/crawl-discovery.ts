@@ -13,6 +13,12 @@ export interface DiscoveredUrl {
 
 const EXCLUDED_PATH = /^\/(?:wp-admin(?:\/|$)|wp-login\.php$|logout(?:\/|$)|log-out(?:\/|$))/i;
 
+function decodeCodePoint(value: string, radix: number): string {
+  const point = parseInt(value, radix);
+  return Number.isFinite(point) && point >= 0 && point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff)
+    ? String.fromCodePoint(point) : "\uFFFD";
+}
+
 function decodeHtmlAttribute(value: string): string {
   return value
     .replace(/&amp;/gi, "&")
@@ -20,8 +26,8 @@ function decodeHtmlAttribute(value: string): string {
     .replace(/&#39;|&apos;/gi, "'")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
-    .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(parseInt(n, 16)));
+    .replace(/&#(\d+);/g, (_, n: string) => decodeCodePoint(n, 10))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => decodeCodePoint(n, 16));
 }
 
 /** Normalize a discovered link and reject anything outside the pinned host. */
@@ -36,6 +42,11 @@ export function normalizeCrawlUrl(rawUrl: string, baseUrl: string, rootHost: str
   }
 
   parsed.hash = "";
+  // Remove only conventional attribution parameters; preserve functional query
+  // parameters and trailing slashes, which can identify distinct resources.
+  for (const key of [...parsed.searchParams.keys()]) {
+    if (/^utm_/i.test(key) || /^(gclid|fbclid|msclkid)$/i.test(key)) parsed.searchParams.delete(key);
+  }
   if (EXCLUDED_PATH.test(parsed.pathname)) return null;
 
   const validation = validateTargetUrl(parsed.href, { allowedHost: rootHost });
@@ -141,8 +152,8 @@ function decodeXmlText(value: string): string {
     .replace(/&apos;|&#39;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
-    .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&#(\d+);/g, (_, n: string) => decodeCodePoint(n, 10))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => decodeCodePoint(n, 16))
     .trim();
 }
 
