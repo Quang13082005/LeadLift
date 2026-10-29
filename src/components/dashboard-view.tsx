@@ -3,6 +3,7 @@ import { FeatureBanner, PageHeading } from "./page-foundation";
 import { Badge, EmptyState, StatCard } from "./ui/primitives";
 import { LEAD_STATUS_LABELS } from "@/types/business";
 import type { DashboardData } from "@/lib/services/dashboard-service";
+import { parseBusinessWebsite } from "@/lib/domain-normalizer";
 
 export function DashboardView({ data, demo = false }: { data: DashboardData; demo?: boolean }) {
   const route = (path: string) => demo ? `/dev/design-v2/${path || "home"}` : `/${path}`;
@@ -12,7 +13,23 @@ export function DashboardView({ data, demo = false }: { data: DashboardData; dem
     {data.error && <div className="notice" role="alert">{data.error}</div>}
     <div className="stats"><StatCard label="Hồ sơ doanh nghiệp" value={data.total} note={demo ? "Dữ liệu minh họa" : "Tổng hồ sơ trong cơ sở dữ liệu"} /><StatCard label="Đã phân tích website" value={data.audited} note={demo ? "Trong bản demo" : "Theo trạng thái hồ sơ; chưa lưu phiên quét"} /><StatCard label="Đề xuất đã chuẩn bị" value={data.prepared} note={demo ? "Cần duyệt trước khi gửi" : "Chưa kết nối quy trình đề xuất"} /><StatCard label="Phản hồi quan tâm" value={data.replies} note={demo ? "Chuyển cho người phụ trách" : "Chưa kết nối hội thoại"} /></div>
     <div className="mapflow">{[["01", "Khám phá khách hàng", "Nguồn công khai, lọc trùng, ưu tiên", "businesses"], ["02", "Website Audit", "Kiểm tra bằng chứng, xác minh", "audit"], ["03", "Tiếp cận & Đề xuất", "Tạo nháp, duyệt và gửi hợp lệ", "outreach"], ["04", "Chốt cơ hội", "Phản hồi → chuyển cho bạn", "businesses?tab=pipeline"]].map(([n, title, description, path]) => <Link className="flowCell" href={route(path)} key={n}><Badge tone="green">BƯỚC {n}</Badge><b>{title}</b><p>{description}</p></Link>)}</div>
-    <div className="dual"><section className="panel"><header className="panelHead"><div><h2>Khách hàng cần hành động</h2><p className="hint">Được cập nhật theo trạng thái cùng một hồ sơ.</p></div><Link className="button button-small" href={route("businesses")}>Xem danh sách →</Link></header>{data.items.length ? <div className="tableWrap"><table className="table dashboard-table" style={{ minWidth: 0, tableLayout: "fixed" }}><thead><tr><th>Doanh nghiệp</th><th>Website</th><th>Trạng thái</th><th><span className="sr-only">Hồ sơ</span></th></tr></thead><tbody>{data.items.map(b => <tr key={b.id}><td><b>{b.name}</b></td><td className="sub">{b.normalizedDomain}</td><td><Badge tone={LEAD_STATUS_LABELS[b.leadStatus].tone}>{LEAD_STATUS_LABELS[b.leadStatus].label}</Badge></td><td><Link className="button button-small" href={`${route("businesses")}?businessId=${encodeURIComponent(b.id)}`} aria-label={`Xem ${b.name}`}>Xem</Link></td></tr>)}</tbody></table></div> : <EmptyState title={data.error ? "Chưa tải được hồ sơ" : "Chưa có doanh nghiệp"} description="Mở Khách hàng & Cơ hội để xem và quản lý hồ sơ." />}</section>
+    <div className="dual dashboard-lower"><section className="panel dashboard-action-list"><header className="panelHead"><div><h2>Khách hàng cần hành động</h2><p className="hint">Được cập nhật theo trạng thái cùng một hồ sơ.</p></div><Link className="button button-small" href={route("businesses")}>Xem danh sách →</Link></header>{data.items.length ? <>
+      <div className="tableWrap dashboard-action-table-wrap"><table className="table dashboard-table" style={{ minWidth: 0, tableLayout: "fixed" }}><thead><tr><th>Doanh nghiệp</th><th>Website</th><th>Trạng thái</th><th><span className="sr-only">Hồ sơ</span></th></tr></thead><tbody>{data.items.map(b => {
+      const website = parseBusinessWebsite(b.websiteUrl);
+      return <tr key={b.id}><td data-label="Doanh nghiệp"><b>{b.name}</b></td><td data-label="Website">{website ? <a className="dashboard-website-link" href={website.url} target="_blank" rel="noopener noreferrer" title={`Mở ${website.domain} trong tab mới`}>{website.domain}<span aria-hidden="true">↗</span></a> : <span className="dashboard-website-invalid">Website chưa hợp lệ</span>}</td><td data-label="Trạng thái"><Badge tone={LEAD_STATUS_LABELS[b.leadStatus].tone}>{LEAD_STATUS_LABELS[b.leadStatus].label}</Badge></td><td data-label="Hành động"><Link className="button button-small" href={`${route("businesses")}?businessId=${encodeURIComponent(b.id)}`} aria-label={`Xem hồ sơ ${b.name}`}>Xem</Link></td></tr>;
+    })}</tbody></table></div>
+      <div className="dashboard-action-cards" role="list" aria-label="Khách hàng cần hành động">
+        {data.items.map((business) => {
+          const website = parseBusinessWebsite(business.websiteUrl);
+          return <article className="dashboard-action-card" role="listitem" key={`card-${business.id}`}>
+            <b>{business.name}</b>
+            <span className="dashboard-card-label">Website</span>
+            {website ? <a className="dashboard-website-link" href={website.url} target="_blank" rel="noopener noreferrer" title={`Mở ${website.domain} trong tab mới`}>{website.domain}<span aria-hidden="true">↗</span></a> : <span className="dashboard-website-invalid">Website chưa hợp lệ</span>}
+            <div className="dashboard-action-card-bottom"><div><span className="dashboard-card-label">Trạng thái</span><Badge tone={LEAD_STATUS_LABELS[business.leadStatus].tone}>{LEAD_STATUS_LABELS[business.leadStatus].label}</Badge></div><Link className="button button-small" href={`${route("businesses")}?businessId=${encodeURIComponent(business.id)}`} aria-label={`Xem hồ sơ ${business.name}`}>Xem</Link></div>
+          </article>;
+        })}
+      </div>
+    </> : <EmptyState title={data.error ? "Chưa tải được hồ sơ" : "Chưa có doanh nghiệp"} description="Mở Khách hàng & Cơ hội để xem và quản lý hồ sơ." />}</section>
     <section className="panel panPad"><h2>Việc cần làm tiếp theo</h2>{[["Xác minh kết quả audit", "Phát hiện tự động không mặc nhiên là lỗi đã xác minh", "audit"], ["Duyệt trước khi gửi", "Kiểm tra nội dung, nguồn liên hệ và sự phù hợp của kênh", "outreach"], ["Nhận phản hồi → chuyển người tư vấn", "Chỉ khi có phản hồi quan tâm mới tạo cơ hội cần theo dõi", "businesses?tab=pipeline"]].map(([title, text, path]) => <div className="logItem" key={title}><span className="dot" /><div><Link href={route(path)}><b>{title}</b></Link><p className="hint">{text}</p></div></div>)}<div className="alert-box alert-green mt-16">Theo dõi Tổng quan và Khách hàng & Cơ hội. Gửi đề xuất và đồng bộ phản hồi sẽ được bổ sung khi có tích hợp.</div></section></div>
   </>;
 }

@@ -10,6 +10,7 @@ import { CsvImportDialog } from "./csv-import-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PipelineView, type PipelineOpportunity } from "./pipeline-view";
 import { fetchBusinessesAction } from "@/app/actions/business";
+import { parseBusinessWebsite } from "@/lib/domain-normalizer";
 import {
   LEAD_STATUS_LABELS,
   type BusinessItem,
@@ -22,6 +23,27 @@ interface BusinessListPageProps {
   initialTab?: "discovery" | "pipeline";
   demo?: boolean;
   pipelineOpportunity?: PipelineOpportunity;
+}
+
+function BusinessWebsiteLink({ websiteUrl, className }: { websiteUrl: string; className: string }) {
+  const website = parseBusinessWebsite(websiteUrl);
+  return website ? (
+    <a
+      className={className}
+      href={website.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={`Mở ${website.domain} trong tab mới`}
+      onClick={(event) => event.stopPropagation()}
+    >
+      {website.domain}<span aria-hidden="true">↗</span>
+    </a>
+  ) : <span className="biz-domain">Website chưa hợp lệ</span>;
+}
+
+function BusinessOpportunityScore({ score }: { score: number | null }) {
+  if (score === null) return <span className="score-unrated" title="Chưa có điểm cơ hội được lưu">—</span>;
+  return <span className={`score-badge ${score < 60 ? "score-bad" : score < 75 ? "score-warn" : "score-good"}`}>{score}/100</span>;
 }
 
 export function BusinessListPage({ initialData, initialSelectedBusinessId, initialTab = "discovery", demo = false, pipelineOpportunity }: BusinessListPageProps) {
@@ -261,7 +283,7 @@ export function BusinessListPage({ initialData, initialSelectedBusinessId, initi
                 </div>
               </header>
 
-              <div className="table-responsive">
+              <div className="table-responsive business-table-responsive">
                 {error ? <EmptyState title="Không thể tải dữ liệu" description="Chưa thể xác định số lượng doanh nghiệp. Vui lòng thử lại." /> : visibleItems.length > 0 ? (
                   <table className="table lead-table business-table">
                     <thead>
@@ -287,40 +309,25 @@ export function BusinessListPage({ initialData, initialSelectedBusinessId, initi
                             key={b.id}
                             className={`table-row-selectable ${isSelected ? "row-selected" : ""}`}
                             onClick={() => setSelectedBusiness(b)}
+                            aria-selected={isSelected}
                             tabIndex={0}
                             onKeyDown={(event) => { if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) { event.preventDefault(); setSelectedBusiness(b); } }}
                           >
-                            <td>
+                            <td data-label="Doanh nghiệp / Website">
                               <div className="biz-name-cell">
                                 <strong className="biz-name">{b.name}</strong>
-                                <span className="biz-domain">{b.normalizedDomain}</span>
+                                <BusinessWebsiteLink websiteUrl={b.websiteUrl} className="biz-domain-link" />
                               </div>
                             </td>
-                            <td>{b.industry}</td>
-                            <td>{b.district ? `${b.district}, ${b.city}` : b.city}</td>
-                            <td>
-                              {b.opportunityScore !== null ? (
-                                <span
-                                  className={`score-badge ${
-                                    b.opportunityScore < 60
-                                      ? "score-bad"
-                                      : b.opportunityScore < 75
-                                      ? "score-warn"
-                                      : "score-good"
-                                  }`}
-                                >
-                                  {b.opportunityScore}/100
-                                </span>
-                              ) : (
-                                <span className="score-unrated" title="Chưa chạy Website Audit">
-                                  —
-                                </span>
-                              )}
+                            <td data-label="Ngành nghề">{b.industry}</td>
+                            <td data-label="Khu vực">{b.district ? `${b.district}, ${b.city}` : b.city}</td>
+                            <td data-label="Điểm">
+                              <BusinessOpportunityScore score={b.opportunityScore} />
                             </td>
-                            <td>
+                            <td data-label="Trạng thái">
                               <Badge tone={statusItem.tone}>{statusItem.label}</Badge>
                             </td>
-                            <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                            <td data-label="Thao tác" className="text-right" onClick={(e) => e.stopPropagation()}>
                               <div className="row-actions">
                                 <Button
                                   variant="quiet"
@@ -361,6 +368,41 @@ export function BusinessListPage({ initialData, initialSelectedBusinessId, initi
                   </EmptyState>
                 )}
               </div>
+
+              {!error && visibleItems.length > 0 && <div className="business-cards" role="list" aria-label="Danh sách doanh nghiệp dạng thẻ">
+                {visibleItems.map((business) => {
+                  const isSelected = selectedBusiness?.id === business.id;
+                  const statusItem = LEAD_STATUS_LABELS[business.leadStatus] || { label: business.leadStatus, tone: "neutral" };
+                  return <article
+                    key={`card-${business.id}`}
+                    className={`business-card ${isSelected ? "row-selected" : ""}`}
+                    role="listitem"
+                    onClick={() => setSelectedBusiness(business)}
+                  >
+                    <header className="business-card-heading">
+                      <button type="button" className="business-card-name" aria-pressed={isSelected} onClick={() => setSelectedBusiness(business)}>{business.name}</button>
+                      <Badge tone={statusItem.tone}>{statusItem.label}</Badge>
+                    </header>
+                    <div className="business-card-website"><BusinessWebsiteLink websiteUrl={business.websiteUrl} className="biz-domain-link" /></div>
+                    <dl className="business-card-meta">
+                      <div><dt>Ngành nghề</dt><dd>{business.industry}</dd></div>
+                      <div><dt>Khu vực</dt><dd>{business.district ? `${business.district}, ${business.city}` : business.city}</dd></div>
+                      <div><dt>Điểm</dt><dd><BusinessOpportunityScore score={business.opportunityScore} /></dd></div>
+                    </dl>
+                    <div className="business-card-actions">
+                      <Button variant="quiet" small onClick={() => setSelectedBusiness(business)} aria-pressed={isSelected}>Xem</Button>
+                      <Link
+                        href={`${demo ? "/dev/design-v2/audit" : "/audit"}?businessId=${encodeURIComponent(business.id)}`}
+                        className="button button-secondary button-small"
+                        title={`Mở Website Audit cho ${business.name}`}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        Audit →
+                      </Link>
+                    </div>
+                  </article>;
+                })}
+              </div>}
 
               {/* Pagination bar */}
               {!error && data.totalPages > 1 && (

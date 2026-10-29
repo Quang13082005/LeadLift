@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Button, Badge, EmptyState } from "@/components/ui/primitives";
 import { LEAD_STATUS_LABELS, type BusinessItem } from "@/types/business";
+import { parseBusinessWebsite } from "@/lib/domain-normalizer";
 
 interface BusinessDetailPanelProps {
   business: BusinessItem | null;
@@ -28,6 +29,7 @@ export function BusinessDetailPanel({ business, onEdit, demo = false }: Business
   }
 
   const statusConfig = LEAD_STATUS_LABELS[business.leadStatus] || { label: business.leadStatus, tone: "neutral" };
+  const website = parseBusinessWebsite(business.websiteUrl);
   const formattedDate = new Date(business.collectedAt).toLocaleDateString("vi-VN", {
     day: "2-digit",
     month: "2-digit",
@@ -68,16 +70,17 @@ export function BusinessDetailPanel({ business, onEdit, demo = false }: Business
         <h3 className="biz-title">{business.name}</h3>
 
         <div className="website-link-wrap">
-          <a
-            href={/^https?:\/\//i.test(business.websiteUrl) ? business.websiteUrl : undefined}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="external-link"
-            title="Mở website trong tab mới"
-          >
-            {business.websiteUrl} <span aria-hidden="true">↗</span>
-          </a>
-          <span className="domain-subtag">({business.normalizedDomain})</span>
+          {website ? (
+            <a
+              href={website.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="external-link"
+              title={`Mở ${website.domain} trong tab mới`}
+            >
+              {website.domain} <span aria-hidden="true">↗</span>
+            </a>
+          ) : <span className="invalid-website">Website chưa hợp lệ</span>}
         </div>
 
         <hr className="divider" />
