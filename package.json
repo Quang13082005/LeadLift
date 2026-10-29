@@ -15,6 +15,7 @@
     "test:scanner": "tsx scripts/test-scanner.ts",
     "test:crawler": "tsx scripts/test-crawler.ts",
     "test:crawl-audit-schema": "tsx scripts/test-crawl-audit-schema.ts",
+    "test:crawl-persistence": "tsx scripts/test-crawl-persistence.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
