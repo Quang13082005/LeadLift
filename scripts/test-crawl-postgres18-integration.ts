@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import dns from "node:dns";
 import fs from "node:fs";
 import path from "node:path";
 import { Pool } from "pg";
@@ -12,6 +13,9 @@ import {
   sanitizeUrl,
   sanitizeEvidence,
 } from "../src/lib/scanner/persistence/sanitizer";
+
+// Ensure IPv4 resolution takes precedence over IPv6 for container localhost on Linux runners
+dns.setDefaultResultOrder("ipv4first");
 
 // ==============================================================================
 // SAFETY GUARD: Fail-closed if production Neon database is targeted
@@ -50,14 +54,15 @@ function enforcePostgres18Isolation(): string {
 async function isPostgresReachable(connectionString: string): Promise<boolean> {
   const probePool = new Pool({
     connectionString,
-    connectionTimeoutMillis: 2000,
+    connectionTimeoutMillis: 5000,
   });
   try {
     const res = await probePool.query("SELECT version() as ver;");
     console.log(`  ✓ Connected to PostgreSQL engine: ${res.rows[0]?.ver}`);
     await probePool.end();
     return true;
-  } catch {
+  } catch (err: unknown) {
+    console.log(`  ℹ Probe connection failed: ${(err as Error)?.message || err}`);
     await probePool.end().catch(() => {});
     return false;
   }
@@ -68,8 +73,18 @@ async function runPostgres18IntegrationSuite() {
   console.log("LEADLIFT — PHASE 03B.2B-2D.B POSTGRESQL 18 CI INTEGRATION TEST");
   console.log("=================================================================");
 
-  const targetDbUrl = enforcePostgres18Isolation();
-  const reachable = await isPostgresReachable(targetDbUrl);
+  let targetDbUrl = enforcePostgres18Isolation();
+  let reachable = await isPostgresReachable(targetDbUrl);
+
+  // If localhost failed (e.g. IPv6 default on Linux runner), retry explicitly with 127.0.0.1
+  if (!reachable && targetDbUrl.includes("localhost")) {
+    const ipv4Url = targetDbUrl.replace("localhost", "127.0.0.1");
+    console.log("  ℹ Retrying connection with IPv4 127.0.0.1...");
+    if (await isPostgresReachable(ipv4Url)) {
+      targetDbUrl = ipv4Url;
+      reachable = true;
+    }
+  }
 
   if (!reachable) {
     if (process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") {
@@ -178,7 +193,7 @@ async function runPostgres18IntegrationSuite() {
     // --------------------------------------------------------------------------
     console.log("\n[TEST 4] Composite Foreign Keys & Isolation Verification");
     const fkRes = await pool.query<{ conname: string }>(
-      `SELECT conname FROM pg_constraint WHERE contype = 'f' AND conrelid::regclass::text LIKE 'crawl_%';`
+      `SELECT conname FROM pg_constraint WHERE contype = 'f' AND conrelid::regclass::text LIKE '%crawl_%';`
     );
     const fkNames = fkRes.rows.map((r) => r.conname);
     assert.ok(
@@ -203,10 +218,10 @@ async function runPostgres18IntegrationSuite() {
       `SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename LIKE 'crawl_%' AND indexdef LIKE '%UNIQUE%';`
     );
     const uniqueIndexes = idxRes.rows.map((r) => r.indexname);
-    assert.ok(uniqueIndexes.includes("crawl_audit_runs_business_id_idempotency_key_key"), "Unique idempotency index must exist");
-    assert.ok(uniqueIndexes.includes("crawl_scanned_urls_run_id_url_fingerprint_key"), "Unique url fingerprint index must exist");
-    assert.ok(uniqueIndexes.includes("crawl_audit_findings_run_id_finding_key_key"), "Unique finding key index must exist");
-    assert.ok(uniqueIndexes.includes("crawl_finding_occurrences_run_id_finding_id_scanned_url_id_key"), "Unique occurrence index must exist");
+    assert.ok(uniqueIndexes.includes("crawl_audit_runs_businessId_idempotencyKey_key"), "Unique idempotency index must exist");
+    assert.ok(uniqueIndexes.includes("crawl_scanned_urls_runId_urlFingerprint_key"), "Unique url fingerprint index must exist");
+    assert.ok(uniqueIndexes.includes("crawl_audit_findings_runId_findingKey_key"), "Unique finding key index must exist");
+    assert.ok(uniqueIndexes.includes("crawl_finding_occurrences_runId_findingId_scannedUrlId_key"), "Unique occurrence index must exist");
     console.log("  ✓ Test 5 PASS: All 4 crawl unique constraints exist.");
 
     // --------------------------------------------------------------------------
@@ -227,7 +242,7 @@ async function runPostgres18IntegrationSuite() {
       "crawl_audit_findings_keys_check",
     ];
     const catalogChecks = await pool.query<{ conname: string }>(
-      `SELECT conname FROM pg_constraint WHERE contype = 'c' AND conrelid::regclass::text LIKE 'crawl_%';`
+      `SELECT conname FROM pg_constraint WHERE contype = 'c' AND conrelid::regclass::text LIKE '%crawl_%';`
     );
     const existingChecks = catalogChecks.rows.map((c) => c.conname);
     for (const c of checkConstraints) {
@@ -242,16 +257,16 @@ async function runPostgres18IntegrationSuite() {
     const testUserId = "usr_ci_test_01";
 
     await pool.query(
-      `INSERT INTO businesses (id, name, domain, created_at, updated_at)
-       VALUES ($1, 'CI Test Business', 'https://ci-test.example.com', NOW(), NOW())
-       ON CONFLICT (id) DO NOTHING;`,
+      `INSERT INTO "businesses" ("id", "name", "industry", "websiteUrl", "normalizedDomain", "updatedAt")
+       VALUES ($1, 'CI Test Business', 'Technology', 'https://ci-test.example.com', 'ci-test.example.com', NOW())
+       ON CONFLICT ("id") DO NOTHING;`,
       [testBusinessId]
     );
 
     await pool.query(
-      `INSERT INTO users (id, email, password_hash, role, created_at, updated_at)
-       VALUES ($1, 'ci_tester@leadlift.internal', 'hash_ci_placeholder', 'ADMIN', NOW(), NOW())
-       ON CONFLICT (id) DO NOTHING;`,
+      `INSERT INTO "users" ("id", "email", "passwordHash", "name", "role", "updatedAt")
+       VALUES ($1, 'ci_tester@leadlift.internal', 'hash_ci_placeholder', 'CI Tester', 'ADMIN', NOW())
+       ON CONFLICT ("id") DO NOTHING;`,
       [testUserId]
     );
 
@@ -421,8 +436,8 @@ async function runPostgres18IntegrationSuite() {
     try {
       // Attempt to link occurrence from run 2 using finding from run 1
       await pool.query(
-        `INSERT INTO crawl_finding_occurrences (id, run_id, finding_id, scanned_url_id, result_status, evidence, observed_at)
-         VALUES ('occ_cross_01', $1, $2, $3, 'FAILED', 'cross-run test', NOW());`,
+        `INSERT INTO "crawl_finding_occurrences" ("id", "runId", "findingId", "scannedUrlId", "resultStatus", "evidence", "observedAt")
+         VALUES ('occ_cross_01', $1, $2, $3, 'FAIL', 'cross-run test', NOW());`,
         [run2.id, findingRecord.id, url1Record.id]
       );
     } catch {
@@ -450,7 +465,7 @@ async function runPostgres18IntegrationSuite() {
     // --------------------------------------------------------------------------
     console.log("\n[TEST 16] Transaction Rollback When Batch Fails");
     const countBefore = await pool.query<{ count: string }>(
-      "SELECT count(*) as count FROM crawl_audit_findings WHERE run_id = $1;",
+      `SELECT count(*) as count FROM "crawl_audit_findings" WHERE "runId" = $1;`,
       [run2.id]
     );
 
@@ -480,7 +495,7 @@ async function runPostgres18IntegrationSuite() {
     assert.strictEqual(batchRollbackOccurred, true);
 
     const countAfter = await pool.query<{ count: string }>(
-      "SELECT count(*) as count FROM crawl_audit_findings WHERE run_id = $1;",
+      `SELECT count(*) as count FROM "crawl_audit_findings" WHERE "runId" = $1;`,
       [run2.id]
     );
     assert.strictEqual(countBefore.rows[0]?.count, countAfter.rows[0]?.count);
@@ -571,7 +586,7 @@ async function runPostgres18IntegrationSuite() {
       concurrencyLimit: 1,
     });
     await pool.query(
-      "UPDATE crawl_audit_runs SET status = 'RUNNING', started_at = $1 WHERE id = $2;",
+      `UPDATE "crawl_audit_runs" SET "status" = 'RUNNING', "startedAt" = $1 WHERE "id" = $2;`,
       [staleTime, staleRun.id]
     );
 
