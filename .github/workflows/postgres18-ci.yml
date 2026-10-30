@@ -3,7 +3,7 @@ name: LeadLift PostgreSQL 18 CI Integration Tests
 # ==============================================================================
 # PHASE 03B.2B-2D.B: ONE-TIME POSTGRESQL 18 CI INTEGRATION RUN
 # Owner & PM approved: Feature branch execution strictly on ubuntu-latest runner.
-# Isolated service container: postgres:18-alpine (localhost:5432).
+# Isolated service container: postgres:18-alpine (127.0.0.1:5432).
 # Zero Neon access, zero production credentials, least privilege (contents: read).
 # ==============================================================================
 
@@ -48,7 +48,7 @@ jobs:
       - name: Setup Node.js Runtime
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: "npm"
 
       - name: Install Dependencies
@@ -56,7 +56,7 @@ jobs:
 
       - name: Verify Safety Isolation & Database Target Guard
         run: |
-          CI_DB_URL="postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
+          CI_DB_URL="postgresql://leadlift_ci_user:leadlift_ci_password_secure@127.0.0.1:5432/leadlift_ci_test?sslmode=disable"
           
           # 1. Fail-closed on Neon production or external pooler
           if echo "$CI_DB_URL" | grep -iE "neon\.tech|pooler"; then
@@ -64,23 +64,23 @@ jobs:
             exit 1
           fi
           
-          # 2. Verify host is strictly localhost
+          # 2. Verify host is strictly localhost or 127.0.0.1
           if ! echo "$CI_DB_URL" | grep -E "@(localhost|127\.0\.0\.1):5432"; then
             echo "SECURITY FATAL: Database host is not local service container! Aborting."
             exit 1
           fi
           
-          echo "Database isolation verified. Pointing strictly to local service container (localhost:5432)."
+          echo "Database isolation verified. Pointing strictly to local service container (127.0.0.1:5432)."
 
       - name: Generate Prisma Client
         env:
-          DATABASE_URL: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
+          DATABASE_URL: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@127.0.0.1:5432/leadlift_ci_test?sslmode=disable"
         run: npx prisma generate
 
       - name: Apply Offline Migrations on PostgreSQL 18
         env:
-          DATABASE_URL: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
-          DATABASE_URL_UNPOOLED: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
+          DATABASE_URL: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@127.0.0.1:5432/leadlift_ci_test?sslmode=disable"
+          DATABASE_URL_UNPOOLED: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@127.0.0.1:5432/leadlift_ci_test?sslmode=disable"
         run: npx prisma migrate deploy
 
       - name: Run Schema Safety Verification
@@ -95,14 +95,22 @@ jobs:
       - name: Run PostgreSQL 18 Live Integration Suite (All 22 Scenarios)
         env:
           CI: "true"
-          DATABASE_URL: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
-          DATABASE_URL_TEST: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
-          DATABASE_URL_UNPOOLED: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
-        run: npm run test:crawl-postgres18
+          DATABASE_URL: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@127.0.0.1:5432/leadlift_ci_test?sslmode=disable"
+          DATABASE_URL_TEST: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@127.0.0.1:5432/leadlift_ci_test?sslmode=disable"
+          DATABASE_URL_UNPOOLED: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@127.0.0.1:5432/leadlift_ci_test?sslmode=disable"
+        run: |
+          echo "### PostgreSQL 18 Integration Test Log" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          npm run test:crawl-postgres18 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          exit $TEST_EXIT_CODE
 
       - name: Run Full Core Test Suites
         run: |
-          npm run test:foundation
-          npm run test:business
-          npm run test:scanner
-          npm run test:crawler
+          echo "### Full Core Test Suites Log" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          (npm run test:foundation && npm run test:business && npm run test:scanner && npm run test:crawler) 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          CORE_EXIT_CODE=${PIPESTATUS[0]}
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          exit $CORE_EXIT_CODE
