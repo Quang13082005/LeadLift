@@ -19,6 +19,12 @@ const SENSITIVE_PARAM_NAMES = new Set([
   "sessionid",
   "phpsessid",
   "jsessionid",
+  "jwt",
+  "sid",
+  "bearer",
+  "key",
+  "sig",
+  "signature",
 ]);
 
 /**
@@ -108,13 +114,15 @@ export function sanitizeEvidence(evidence: string): string {
     // Strip <script> and <style> tags and their contents
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "[REDACTED_SCRIPT]")
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "[REDACTED_STYLE]")
-    // Strip Authorization / Bearer tokens
+    // Strip Authorization / Bearer / Basic tokens
     .replace(/bearer\s+[a-zA-Z0-9._~+/-]+=*/gi, "Bearer [REDACTED_TOKEN]")
+    .replace(/basic\s+[a-zA-Z0-9+/=]+/gi, "Basic [REDACTED_TOKEN]")
     .replace(/authorization:\s*[^\r\n]+/gi, "Authorization: [REDACTED]")
-    // Strip Cookies
+    // Strip Cookies & Set-Cookie
+    .replace(/set-cookie:\s*[^\r\n]+/gi, "Set-Cookie: [REDACTED]")
     .replace(/cookie:\s*[^\r\n]+/gi, "Cookie: [REDACTED]")
-    // Strip basic passwords in key-value format
-    .replace(/(password|passwd|secret|token)\s*[:=]\s*["']?[^"',\s}]+/gi, "$1: [REDACTED]");
+    // Strip basic passwords / secrets / keys in key-value format
+    .replace(/(password|passwd|secret|token|api[-_]?key)\s*[:=]\s*["']?[^"',\s}]+/gi, "$1: [REDACTED]");
 
   if (scrubbed.length > 8000) {
     scrubbed = scrubbed.slice(0, 7960) + " ... [TRUNCATED_EVIDENCE_AT_8000_BYTES]";

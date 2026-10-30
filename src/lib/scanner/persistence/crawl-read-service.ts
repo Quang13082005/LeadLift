@@ -116,10 +116,52 @@ export class CrawlReadService {
       };
     }
 
+    if (baseRun.scannerVersion !== targetRun.scannerVersion) {
+      return {
+        comparable: false,
+        incompatibilityReason: `Scanner version mismatch: '${baseRun.scannerVersion}' vs '${targetRun.scannerVersion}'`,
+        baseRunId,
+        targetRunId,
+        summary: { persistingCount: 0, newCount: 0, resolvedCount: 0, unresolvedNotRecheckedCount: 0 },
+        persistingFindings: [],
+        newFindings: [],
+        resolvedFindings: [],
+        unresolvedNotRechecked: [],
+      };
+    }
+
+    if (baseRun.urlFingerprintKeyVersion !== targetRun.urlFingerprintKeyVersion) {
+      return {
+        comparable: false,
+        incompatibilityReason: `URL fingerprint key version mismatch: '${baseRun.urlFingerprintKeyVersion}' vs '${targetRun.urlFingerprintKeyVersion}'`,
+        baseRunId,
+        targetRunId,
+        summary: { persistingCount: 0, newCount: 0, resolvedCount: 0, unresolvedNotRecheckedCount: 0 },
+        persistingFindings: [],
+        newFindings: [],
+        resolvedFindings: [],
+        unresolvedNotRechecked: [],
+      };
+    }
+
     if (baseRun.comparisonKeyVersion !== targetRun.comparisonKeyVersion) {
       return {
         comparable: false,
         incompatibilityReason: `Comparison key version mismatch: '${baseRun.comparisonKeyVersion}' vs '${targetRun.comparisonKeyVersion}'`,
+        baseRunId,
+        targetRunId,
+        summary: { persistingCount: 0, newCount: 0, resolvedCount: 0, unresolvedNotRecheckedCount: 0 },
+        persistingFindings: [],
+        newFindings: [],
+        resolvedFindings: [],
+        unresolvedNotRechecked: [],
+      };
+    }
+
+    if (targetRun.status === "FAILED" || targetRun.status === "BLOCKED" || targetRun.urls.length === 0) {
+      return {
+        comparable: false,
+        incompatibilityReason: `Target run is ${targetRun.status} with ${targetRun.urls.length} scanned URLs; cannot perform valid comparison`,
         baseRunId,
         targetRunId,
         summary: { persistingCount: 0, newCount: 0, resolvedCount: 0, unresolvedNotRecheckedCount: 0 },

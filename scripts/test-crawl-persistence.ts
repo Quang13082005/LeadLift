@@ -532,8 +532,333 @@ async function runPersistenceTests() {
     console.log("  ✓ All persistence tests operated in memory. Zero writes or mutations made to Neon or any external database.");
   }
 
+  // ----------------------------------------------------
+  // TEST 10: Concurrent Idempotent Run Creation
+  // ----------------------------------------------------
+  console.log("\n[TEST 10] Concurrent Idempotent Run Creation (Race Condition Safety)");
+  {
+    const sharedIdempotencyKey = `concurrent-test-key-${Date.now()}`;
+    const [concurrentRun1, concurrentRun2, concurrentRun3] = await Promise.all([
+      writeService.initiateRun({
+        businessId: testBusinessId,
+        rootUrl: "https://lacadanang.quangdev.id.vn/",
+        requestedUrlLimit: 20,
+        depthLimit: 2,
+        concurrencyLimit: 2,
+        idempotencyKey: sharedIdempotencyKey,
+      }),
+      writeService.initiateRun({
+        businessId: testBusinessId,
+        rootUrl: "https://lacadanang.quangdev.id.vn/",
+        requestedUrlLimit: 20,
+        depthLimit: 2,
+        concurrencyLimit: 2,
+        idempotencyKey: sharedIdempotencyKey,
+      }),
+      writeService.initiateRun({
+        businessId: testBusinessId,
+        rootUrl: "https://lacadanang.quangdev.id.vn/",
+        requestedUrlLimit: 20,
+        depthLimit: 2,
+        concurrencyLimit: 2,
+        idempotencyKey: sharedIdempotencyKey,
+      }),
+    ]);
+
+    assert.equal(concurrentRun1.id, concurrentRun2.id);
+    assert.equal(concurrentRun2.id, concurrentRun3.id);
+    console.log("  ✓ 3 concurrent initiateRun calls with identical idempotencyKey resolved to identical run ID.");
+  }
+
+  // ----------------------------------------------------
+  // TEST 11: Invalid State Transitions & Lifecycle Guards
+  // ----------------------------------------------------
+  console.log("\n[TEST 11] Invalid State Transitions & Lifecycle Guards");
+  {
+    const run = await writeService.initiateRun({
+      businessId: testBusinessId,
+      rootUrl: "https://lacadanang.quangdev.id.vn/",
+      requestedUrlLimit: 10,
+      depthLimit: 1,
+      concurrencyLimit: 1,
+    });
+
+    // 1. Cannot start a run that is already RUNNING
+    await assert.rejects(async () => {
+      await repository.startRun(run.id);
+    }, /Cannot start run in status RUNNING/);
+
+    // 2. Finalize run properly
+    await repository.finalizeRun(run.id, {
+      status: "COMPLETED",
+      finishedAt: new Date(),
+      counters: {
+        discoveredCount: 1,
+        eligibleCount: 1,
+        queuedCount: 0,
+        attemptedCount: 1,
+        succeededCount: 1,
+        failedCount: 0,
+        skippedRobotsCount: 0,
+        skippedDepthCount: 0,
+        skippedCandidateLimitCount: 0,
+        skippedScopeCount: 0,
+        remainingCount: 0,
+        limitReached: false,
+        discoveryTruncated: false,
+        downloadedBytes: 1000,
+      },
+    });
+
+    // 3. Cannot finalize an already COMPLETED run
+    await assert.rejects(async () => {
+      await repository.finalizeRun(run.id, {
+        status: "COMPLETED",
+        finishedAt: new Date(),
+        counters: { ...run.counters },
+      });
+    }, /Cannot finalize run in terminal status COMPLETED/);
+
+    // 4. Cannot fail an already COMPLETED run
+    await assert.rejects(async () => {
+      await repository.failRun(run.id, {
+        finishedAt: new Date(),
+        failureCode: "ERR_TEST",
+      });
+    }, /Cannot fail run in terminal status COMPLETED/);
+
+    // 5. Cannot finalize with finishedAt before startedAt
+    const runForTimeCheck = await writeService.initiateRun({
+      businessId: testBusinessId,
+      rootUrl: "https://lacadanang.quangdev.id.vn/",
+      requestedUrlLimit: 10,
+      depthLimit: 1,
+      concurrencyLimit: 1,
+    });
+
+    const pastDate = new Date(runForTimeCheck.startedAt!.getTime() - 100000);
+    await assert.rejects(async () => {
+      await repository.finalizeRun(runForTimeCheck.id, {
+        status: "COMPLETED",
+        finishedAt: pastDate,
+        counters: { ...runForTimeCheck.counters },
+      });
+    }, /finishedAt cannot be before startedAt/);
+
+    // 6. Cannot finalize with attemptedCount > requestedUrlLimit
+    await assert.rejects(async () => {
+      await repository.finalizeRun(runForTimeCheck.id, {
+        status: "COMPLETED",
+        finishedAt: new Date(),
+        counters: {
+          ...runForTimeCheck.counters,
+          attemptedCount: 999, // exceeds requestedUrlLimit 10
+        },
+      });
+    }, /attemptedCount.*exceeds requestedUrlLimit/);
+
+    console.log("  ✓ All 6 invalid lifecycle transitions & time constraints rejected.");
+  }
+
+  // ----------------------------------------------------
+  // TEST 12: Cross-Run Isolation & Composite FK Enforcement
+  // ----------------------------------------------------
+  console.log("\n[TEST 12] Cross-Run Isolation & Composite FK Constraint Enforcement");
+  {
+    const runA = await writeService.initiateRun({
+      businessId: testBusinessId,
+      rootUrl: "https://lacadanang.quangdev.id.vn/",
+      requestedUrlLimit: 10,
+      depthLimit: 1,
+      concurrencyLimit: 1,
+    });
+    const runB = await writeService.initiateRun({
+      businessId: testBusinessId,
+      rootUrl: "https://lacadanang.quangdev.id.vn/",
+      requestedUrlLimit: 10,
+      depthLimit: 1,
+      concurrencyLimit: 1,
+    });
+
+    const urlA = await writeService.persistUrlResult(runA.id, {
+      url: "https://lacadanang.quangdev.id.vn/page-a",
+      depth: 1,
+      status: "SCANNED",
+      httpStatus: 200,
+      scannedAt: new Date().toISOString(),
+      findings: [],
+      internalLinks: [],
+      discoveredFrom: [],
+    });
+
+    const [findingB] = await writeService.persistFindingsBatch(runB.id, [
+      {
+        id: "fnd_b_isolated",
+        ruleId: "SEO_TITLE_EXISTS",
+        ruleName: "Thiếu thẻ title",
+        category: "SEO",
+        description: "Mô tả",
+        severity: "HIGH",
+        status: "FAIL",
+        evidence: "evidence",
+        timestamp: new Date().toISOString(),
+        affectedUrls: [],
+      },
+    ]);
+
+    // Attempting to attach occurrence from Finding B to URL A across runs must fail!
+    await assert.rejects(async () => {
+      await repository.recordFindingsBatch(runB.id, [
+        {
+          ruleId: "SEO_TITLE_EXISTS",
+          category: "SEO",
+          severity: "HIGH",
+          resultStatus: "FAIL",
+          ruleName: "Thiếu thẻ title",
+          description: "Mô tả",
+          recommendation: "Gợi ý",
+          occurrences: [
+            {
+              scannedUrlId: urlA.id, // belongs to Run A!
+              resultStatus: "FAIL",
+              evidence: "cross-run-leak-attempt",
+            },
+          ],
+        },
+      ]);
+    }, /Foreign key constraint violation.*does not exist in run/);
+
+    // Attempting to attach verification for Finding B passing Run A
+    await assert.rejects(async () => {
+      await repository.recordVerification(runA.id, findingB!.id, {
+        status: "CONFIRMED",
+        actorUserId: "user_admin_001",
+      });
+    }, /Composite FK violation.*does not belong to run/);
+
+    console.log("  ✓ Cross-run foreign key linkage & isolation strictly enforced.");
+  }
+
+  // ----------------------------------------------------
+  // TEST 13: Enhanced Sanitization & Collisions
+  // ----------------------------------------------------
+  console.log("\n[TEST 13] Enhanced Sanitization: Collisions, Sensitive Tokens & Evidence Length");
+  {
+    // Query param collision: functional param preserved, tracking stripped
+    const collidedUrl = "https://lacadanang.quangdev.id.vn/search?page=1&utm_source=facebook&token=supersecret123&jwt=eyJhbGciOi...&page=2&apiKey=ABC999";
+    const cleanedUrl = sanitizeUrl(collidedUrl);
+    assert.equal(cleanedUrl.includes("page=1"), true, "Must preserve page=1");
+    assert.equal(cleanedUrl.includes("page=2"), true, "Must preserve page=2");
+    assert.equal(cleanedUrl.includes("utm_source"), false, "Must strip utm_source");
+    assert.equal(cleanedUrl.includes("supersecret123"), false, "Must strip token");
+    assert.equal(cleanedUrl.includes("jwt="), false, "Must strip jwt");
+    assert.equal(cleanedUrl.includes("ABC999"), false, "Must strip apiKey");
+
+    // Evidence scrubbing
+    const dangerousEvidence = "Header dump: Authorization: Basic dXNlcjpwYXNz, Set-Cookie: secret_session=xyz987, api_key: key_secret_456, <script src='evil.js'></script>";
+    const scrubbedEvidence = sanitizeEvidence(dangerousEvidence);
+    assert.equal(scrubbedEvidence.includes("dXNlcjpwYXNz"), false);
+    assert.equal(scrubbedEvidence.includes("xyz987"), false);
+    assert.equal(scrubbedEvidence.includes("key_secret_456"), false);
+    assert.equal(scrubbedEvidence.includes("<script"), false);
+
+    // Bounded evidence > 8000 bytes
+    const hugeEvidence = "A".repeat(10000);
+    const boundedEvidence = sanitizeEvidence(hugeEvidence);
+    assert.ok(boundedEvidence.length <= 8000);
+    assert.ok(boundedEvidence.includes("[TRUNCATED_EVIDENCE_AT_8000_BYTES]"));
+
+    console.log("  ✓ Collided params preserved, sensitive tokens/credentials/Set-Cookie stripped, evidence capped at 8000 chars.");
+  }
+
+  // ----------------------------------------------------
+  // TEST 14: Version & Scope Comparison Safeguards
+  // ----------------------------------------------------
+  console.log("\n[TEST 14] Version, Scope & Target Run Status Comparison Safeguards");
+  {
+    const baseRun = await writeService.initiateRun({
+      businessId: testBusinessId,
+      rootUrl: "https://lacadanang.quangdev.id.vn/",
+      requestedUrlLimit: 10,
+      depthLimit: 1,
+      concurrencyLimit: 1,
+      scannerVersion: "03B.1",
+    });
+
+    const targetRunScannerMismatch = await writeService.initiateRun({
+      businessId: testBusinessId,
+      rootUrl: "https://lacadanang.quangdev.id.vn/",
+      requestedUrlLimit: 10,
+      depthLimit: 1,
+      concurrencyLimit: 1,
+      scannerVersion: "03B.2", // mismatch
+    });
+
+    const compMismatch = await readService.compareRuns(baseRun.id, targetRunScannerMismatch.id);
+    assert.equal(compMismatch.comparable, false);
+    assert.ok(compMismatch.incompatibilityReason?.includes("Scanner version mismatch"));
+
+    // Target run failed with 0 URLs
+    const targetRunFailed = await writeService.initiateRun({
+      businessId: testBusinessId,
+      rootUrl: "https://lacadanang.quangdev.id.vn/",
+      requestedUrlLimit: 10,
+      depthLimit: 1,
+      concurrencyLimit: 1,
+    });
+    await repository.failRun(targetRunFailed.id, {
+      finishedAt: new Date(),
+      failureCode: "DNS_TIMEOUT",
+    });
+
+    const compFailed = await readService.compareRuns(baseRun.id, targetRunFailed.id);
+    assert.equal(compFailed.comparable, false);
+    assert.ok(compFailed.incompatibilityReason?.includes("Target run is FAILED"));
+
+    console.log("  ✓ Scanner version mismatch and failed target run properly rejected as non-comparable.");
+  }
+
+  // ----------------------------------------------------
+  // TEST 15: Verification Actor Validation
+  // ----------------------------------------------------
+  console.log("\n[TEST 15] Verification Actor Validation");
+  {
+    const run = await writeService.initiateRun({
+      businessId: testBusinessId,
+      rootUrl: "https://lacadanang.quangdev.id.vn/",
+      requestedUrlLimit: 10,
+      depthLimit: 1,
+      concurrencyLimit: 1,
+    });
+
+    const [fnd] = await writeService.persistFindingsBatch(run.id, [
+      {
+        id: "fnd_actor_test",
+        ruleId: "SEO_TITLE_EXISTS",
+        ruleName: "Thiếu thẻ title",
+        category: "SEO",
+        description: "Mô tả",
+        severity: "HIGH",
+        status: "FAIL",
+        evidence: "Missing title",
+        timestamp: new Date().toISOString(),
+        affectedUrls: [],
+      },
+    ]);
+
+    // Whitespace actorUserId rejected
+    await assert.rejects(async () => {
+      await repository.recordVerification(run.id, fnd!.id, {
+        status: "CONFIRMED",
+        actorUserId: "   ",
+      });
+    }, /actorUserId is required/);
+
+    console.log("  ✓ Whitespace-only actorUserId rejected with clear error.");
+  }
+
   console.log("\n=================================================");
-  console.log("ALL 9 PERSISTENCE FOUNDATION TESTS PASSED!");
+  console.log("ALL 15 PERSISTENCE & QA TESTS PASSED!");
   console.log("=================================================\n");
 }
 

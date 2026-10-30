@@ -73,10 +73,22 @@ export class CrawlWriteService {
       comparisonKeyVersion: "v1",
     });
 
-    // Atomic transition to RUNNING outside network operations
-    await this.repository.startRun(run.id, new Date());
-    const startedRun = await this.repository.getRun(run.id);
-    return startedRun || run;
+    // Atomic transition to RUNNING outside network operations if still PENDING
+    if (run.status === "PENDING") {
+      try {
+        await this.repository.startRun(run.id, new Date());
+        const startedRun = await this.repository.getRun(run.id);
+        return startedRun || run;
+      } catch (err: unknown) {
+        // If concurrent start happened, return current state
+        const current = await this.repository.getRun(run.id);
+        if (current && current.status !== "PENDING") {
+          return current;
+        }
+        throw err;
+      }
+    }
+    return run;
   }
 
   /**

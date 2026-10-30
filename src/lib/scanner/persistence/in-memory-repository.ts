@@ -314,8 +314,9 @@ export class InMemoryCrawlAuditRepository implements ICrawlAuditRepository {
           scannedUrlId = this.urlsByRunAndFingerprint.get(`${runId}:${occ.urlFingerprint}`);
         }
 
-        if (!scannedUrlId || !this.urls.has(scannedUrlId)) {
-          // Relational constraint: scanned URL must exist in the same run
+        const urlRec = scannedUrlId ? this.urls.get(scannedUrlId) : undefined;
+        if (!scannedUrlId || !urlRec || urlRec.runId !== runId) {
+          // Relational constraint: scanned URL must exist in the same run (composite FK)
           throw new Error(`Foreign key constraint violation: Scanned URL ${scannedUrlId} does not exist in run ${runId}`);
         }
 
@@ -389,6 +390,10 @@ export class InMemoryCrawlAuditRepository implements ICrawlAuditRepository {
   public async failRun(runId: string, input: FailRunInput): Promise<CrawlAuditRunDto> {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`Run not found: ${runId}`);
+
+    if (run.status === "COMPLETED" || run.status === "CANCELLED") {
+      throw new Error(`Cannot fail run in terminal status ${run.status}`);
+    }
 
     run.status = "FAILED";
     run.finishedAt = input.finishedAt;

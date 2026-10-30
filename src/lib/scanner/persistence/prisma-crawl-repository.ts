@@ -293,8 +293,11 @@ export class PrismaCrawlAuditRepository implements ICrawlAuditRepository {
             if (urlRecord) scannedUrlId = urlRecord.id;
           }
 
-          if (scannedUrlId) {
-            await tx.crawlFindingOccurrence.upsert({
+          if (!scannedUrlId) {
+            throw new Error(`Foreign key constraint violation: Scanned URL with fingerprint ${occ.urlFingerprint} not found in run ${runId}`);
+          }
+
+          await tx.crawlFindingOccurrence.upsert({
               where: {
                 runId_findingId_scannedUrlId: {
                   runId,
@@ -315,7 +318,6 @@ export class PrismaCrawlAuditRepository implements ICrawlAuditRepository {
                 observedAt: occ.observedAt || new Date(),
               },
             });
-          }
         }
 
         results.push({
@@ -390,6 +392,15 @@ export class PrismaCrawlAuditRepository implements ICrawlAuditRepository {
   }
 
   public async failRun(runId: string, input: FailRunInput): Promise<CrawlAuditRunDto> {
+    const existing = await this.client.crawlAuditRun.findUnique({
+      where: { id: runId },
+      select: { status: true },
+    });
+    if (!existing) throw new Error(`Run not found: ${runId}`);
+    if (existing.status === "COMPLETED" || existing.status === "CANCELLED") {
+      throw new Error(`Cannot fail run in terminal status ${existing.status}`);
+    }
+
     const updated = await this.client.crawlAuditRun.update({
       where: { id: runId },
       data: {
@@ -435,6 +446,10 @@ export class PrismaCrawlAuditRepository implements ICrawlAuditRepository {
     findingId: string,
     input: RecordVerificationInput
   ): Promise<VerificationRecordDto> {
+    if (!input.actorUserId || !input.actorUserId.trim()) {
+      throw new Error("actorUserId is required for durable verification");
+    }
+
     const created = await this.client.crawlFindingVerification.create({
       data: {
         runId,
