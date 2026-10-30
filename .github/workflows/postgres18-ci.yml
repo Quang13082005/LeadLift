@@ -1,0 +1,108 @@
+name: LeadLift PostgreSQL 18 CI Integration Tests
+
+# ==============================================================================
+# PHASE 03B.2B-2D.B: ONE-TIME POSTGRESQL 18 CI INTEGRATION RUN
+# Owner & PM approved: Feature branch execution strictly on ubuntu-latest runner.
+# Isolated service container: postgres:18-alpine (localhost:5432).
+# Zero Neon access, zero production credentials, least privilege (contents: read).
+# ==============================================================================
+
+on:
+  push:
+    branches:
+      - feature/leadlift-phase03b2-audit-persistence
+  workflow_dispatch:
+
+concurrency:
+  group: postgres18-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-postgres18:
+    name: PostgreSQL 18 Service Container Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: leadlift_ci_user
+          POSTGRES_PASSWORD: leadlift_ci_password_secure
+          POSTGRES_DB: leadlift_ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Verify Safety Isolation & Database Target Guard
+        run: |
+          CI_DB_URL="postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
+          
+          # 1. Fail-closed on Neon production or external pooler
+          if echo "$CI_DB_URL" | grep -iE "neon\.tech|pooler"; then
+            echo "SECURITY FATAL: External database detected in CI configuration! Aborting."
+            exit 1
+          fi
+          
+          # 2. Verify host is strictly localhost
+          if ! echo "$CI_DB_URL" | grep -E "@(localhost|127\.0\.0\.1):5432"; then
+            echo "SECURITY FATAL: Database host is not local service container! Aborting."
+            exit 1
+          fi
+          
+          echo "Database isolation verified. Pointing strictly to local service container (localhost:5432)."
+
+      - name: Generate Prisma Client
+        env:
+          DATABASE_URL: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
+        run: npx prisma generate
+
+      - name: Apply Offline Migrations on PostgreSQL 18
+        env:
+          DATABASE_URL: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
+          DATABASE_URL_UNPOOLED: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
+        run: npx prisma migrate deploy
+
+      - name: Run Schema Safety Verification
+        run: npm run test:crawl-audit-schema
+
+      - name: Run In-Memory Persistence Tests
+        run: npm run test:crawl-persistence
+
+      - name: Run PGlite Offline Database Tests
+        run: npm run test:crawl-offline-db
+
+      - name: Run PostgreSQL 18 Live Integration Suite (All 22 Scenarios)
+        env:
+          CI: "true"
+          DATABASE_URL: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
+          DATABASE_URL_TEST: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
+          DATABASE_URL_UNPOOLED: "postgresql://leadlift_ci_user:leadlift_ci_password_secure@localhost:5432/leadlift_ci_test?sslmode=disable"
+        run: npm run test:crawl-postgres18
+
+      - name: Run Full Core Test Suites
+        run: |
+          npm run test:foundation
+          npm run test:business
+          npm run test:scanner
+          npm run test:crawler

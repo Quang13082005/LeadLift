@@ -65,13 +65,19 @@ async function isPostgresReachable(connectionString: string): Promise<boolean> {
 
 async function runPostgres18IntegrationSuite() {
   console.log("=================================================================");
-  console.log("LEADLIFT — PHASE 03B.2B-2D.A POSTGRESQL 18 CI INTEGRATION TEST");
+  console.log("LEADLIFT — PHASE 03B.2B-2D.B POSTGRESQL 18 CI INTEGRATION TEST");
   console.log("=================================================================");
 
   const targetDbUrl = enforcePostgres18Isolation();
   const reachable = await isPostgresReachable(targetDbUrl);
 
   if (!reachable) {
+    if (process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") {
+      throw new Error(
+        "FATAL CI FAILURE: PostgreSQL 18 service container is not reachable on localhost:5432 in CI environment! Aborting immediately."
+      );
+    }
+
     console.log("\n=================================================================");
     console.log("ℹ [PREFLIGHT MODE] PostgreSQL service container is not reachable on localhost:5432.");
     console.log("ℹ Target runtime: GitHub Actions CI runner (ubuntu-latest with postgres:18-alpine).");
