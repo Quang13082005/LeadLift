@@ -17,7 +17,8 @@
     "test:crawl-audit-schema": "tsx scripts/test-crawl-audit-schema.ts",
     "test:crawl-persistence": "tsx scripts/test-crawl-persistence.ts",
     "postinstall": "prisma generate",
-    "test:crawl-offline-db": "tsx scripts/test-crawl-offline-db.ts"
+    "test:crawl-offline-db": "tsx scripts/test-crawl-offline-db.ts",
+    "test:crawl-postgres18": "tsx scripts/test-crawl-postgres18-integration.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
@@ -32,13 +33,16 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.4.3",
+    "@prisma/adapter-pg": "^7.10.1",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/ws": "^8.18.2",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
+    "pg": "^8.23.1",
     "prisma": "^7.10.1",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
